@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "dssgd"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "networkx>=3.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+vision = ["torchvision>=0.15"]
+dev = ["matplotlib>=3.7", "pytest>=7.0", "torchvision>=0.15"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# makes the dssgd package importable without a prior pip install -e .
+pythonpath = ["."]
+markers = [
+    "slow: MNIST + local training; skip with -m 'not slow'",
+]
