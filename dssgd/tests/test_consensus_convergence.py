@@ -200,7 +200,7 @@ def _consensus_distance(agents: List[Agent], ids: Optional[List[int]] = None) ->
         return 0.0
     stacked = torch.stack(states)
     mean = stacked.mean(0)
-    return float(torch.stack([(s - mean).norm() for s in stacked]).mean())
+    return float(torch.stack([(s - mean).norm(2) for s in stacked]).mean())
 
 
 def _mean_loss(agents: List[Agent]) -> float:

@@ -59,12 +59,14 @@ class BarabasiAlbertTopology(Topology):
 
 class NestedModularTopology(Topology):
     """
-    Nested modular hierarchy following Moretti & Munoz.
+    Nested modular hierarchy (Safari–Moretti–Muñoz / Moretti–Muñoz construction).
 
-    Nodes are arranged in a ``branching``-ary tree of ``depth`` levels.
-    Bottom-level modules form complete graphs. At each successive level the
-    gateway (first) node of each sibling sub-module is wired into a clique,
-    propagating connectivity up the hierarchy.
+    Level 0: n/leaf_size disjoint cliques of size leaf_size (m in the paper).
+    Level ℓ ≥ 1: super-modules are formed by grouping `branching` child modules.
+    Cross-module edges between each pair of distinct child modules are added
+    independently with probability p/4^ℓ, so inter-module edge density decays
+    geometrically with depth.  Any node within a module can acquire bridging
+    edges at any level — there is no fixed gateway node.
 
     Total nodes = branching ** depth * leaf_size.
 
@@ -75,18 +77,37 @@ class NestedModularTopology(Topology):
     depth : int
         Number of hierarchy levels (depth=1 gives flat, non-nested clusters).
     leaf_size : int
-        Number of nodes per bottom-level module.
+        Number of nodes per bottom-level module.  m in the paper.
+    p : float
+        Base inter-module edge probability.  At level ℓ, each cross-module
+        node-pair is connected independently with probability p / 4**ℓ.
+        Default p=2 gives level-1 edge probability 0.5 and expected degree 2
+        at level 1 — the stochastic sparse regime studied in Safari et al.
+        Using p=leaf_size (e.g. p=4) degenerately makes level-1 a complete
+        bipartite graph (probability = 1) and should be avoided.
+    seed : int
+        RNG seed for reproducibility.
     """
 
-    def __init__(self, branching: int, depth: int, leaf_size: int):
+    def __init__(
+        self,
+        branching: int,
+        depth: int,
+        leaf_size: int,
+        p: float = None,
+        seed: int = 0,
+    ):
+        if p is None:
+            p = 2.0   # sparse stochastic regime: level-1 edge prob = 0.5
+        rng = np.random.default_rng(seed)
         n_leaf_modules = branching ** depth
         n = n_leaf_modules * leaf_size
         G = nx.Graph()
         G.add_nodes_from(range(n))
 
-        # Dense intra-module cliques at the leaf level
-        for m in range(n_leaf_modules):
-            start = m * leaf_size
+        # Level 0: dense intra-module cliques
+        for mod in range(n_leaf_modules):
+            start = mod * leaf_size
             nodes = list(range(start, start + leaf_size))
             G.add_edges_from(
                 (nodes[i], nodes[j])
@@ -94,24 +115,41 @@ class NestedModularTopology(Topology):
                 for j in range(i + 1, len(nodes))
             )
 
-        # Sparse inter-module gateway cliques at each hierarchical level.
-        # At level l, group leaf modules into super-modules of size branching^l;
-        # the gateway node of each child sub-module connects to its siblings.
+        # Level ℓ ≥ 1: stochastic cross-module edges with probability p / 4^ℓ.
+        # For each super-module at this level, edges are sampled independently
+        # between every pair of distinct child sub-modules across all their nodes,
+        # so bridging connections are distributed throughout the module rather than
+        # concentrated at a single gateway.
         for level in range(1, depth + 1):
             super_size = branching ** level        # leaf modules per super-module
             n_super = n_leaf_modules // super_size
             child_size = branching ** (level - 1)  # leaf modules per child
+            p_level = p / (4.0 ** level)
 
             for sm in range(n_super):
-                gateways = [
-                    (sm * super_size + c * child_size) * leaf_size
+                # Node lists for each child sub-module inside this super-module
+                children = [
+                    list(range(
+                        (sm * super_size + c * child_size) * leaf_size,
+                        (sm * super_size + c * child_size + child_size) * leaf_size,
+                    ))
                     for c in range(branching)
                 ]
-                G.add_edges_from(
-                    (gateways[i], gateways[j])
-                    for i in range(len(gateways))
-                    for j in range(i + 1, len(gateways))
-                )
+
+                # Sample cross-edges independently between every pair of children
+                for a in range(branching):
+                    for b in range(a + 1, branching):
+                        for u in children[a]:
+                            for v in children[b]:
+                                if rng.random() < p_level:
+                                    G.add_edge(u, v)
+
+        if not nx.is_connected(G):
+            raise ValueError(
+                f"NestedModularTopology(branching={branching}, depth={depth}, "
+                f"leaf_size={leaf_size}, p={p}, seed={seed}) produced a disconnected "
+                f"graph.  Increase p or the seed."
+            )
 
         self._G = G
         self._W = metropolis_hastings(G)
