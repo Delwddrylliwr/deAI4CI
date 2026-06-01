@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
+import numpy as np
 import pytest
 import torch
 import torch.nn as nn
@@ -14,7 +15,7 @@ from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.data.partition import dirichlet_partition, iid_partition, make_loaders
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AllReduce, GossipAveraging, PushSum
+from dssgd.protocols.gossip import AllReduce, AsynchronousGossip, CompositeProtocol, GossipAveraging, PushSum
 from dssgd.topology.multilayer import MultiLayerTopology
 from dssgd.topology.static import FullyConnectedTopology, GridTopology, RingTopology
 
@@ -312,6 +313,41 @@ CONVERGENCE_CONFIGS = [
         topology_factory=lambda: RingTopology(6),
         protocol_factory=PushSum,
         n_rounds=200,
+        atol=1e-3,
+        subsets={"first_half": [0, 1, 2], "second_half": [3, 4, 5]},
+    ),
+    # --- AsynchronousGossip ---
+    # Poisson rate=5 on a 5-node fully-connected graph: ~5 events/round,
+    # enough to converge within 200 rounds.
+    ConvergenceTestConfig(
+        name="async_gossip/poisson/fully_connected/n=5",
+        n_agents=5,
+        topology_factory=lambda: FullyConnectedTopology(5),
+        protocol_factory=lambda: AsynchronousGossip(rate=5.0, mode="poisson", rng=np.random.default_rng(0)),
+        n_rounds=200,
+        atol=1e-3,
+    ),
+    # Fixed interval=1, rate=6 events/round on a ring: deterministic burst
+    # each round is sufficient for convergence given enough rounds.
+    ConvergenceTestConfig(
+        name="async_gossip/fixed/ring/n=6",
+        n_agents=6,
+        topology_factory=lambda: RingTopology(6),
+        protocol_factory=lambda: AsynchronousGossip(rate=6.0, mode="fixed", interval=1, rng=np.random.default_rng(1)),
+        n_rounds=400,
+        atol=1e-2,
+        subsets={"first_half": [0, 1, 2], "second_half": [3, 4, 5]},
+    ),
+    # CompositeProtocol: one synchronous averaging pass then a Poisson burst.
+    ConvergenceTestConfig(
+        name="composite/gossip+async/ring/n=6",
+        n_agents=6,
+        topology_factory=lambda: RingTopology(6),
+        protocol_factory=lambda: CompositeProtocol([
+            GossipAveraging(),
+            AsynchronousGossip(rate=3.0, mode="poisson", rng=np.random.default_rng(2)),
+        ]),
+        n_rounds=100,
         atol=1e-3,
         subsets={"first_half": [0, 1, 2], "second_half": [3, 4, 5]},
     ),
