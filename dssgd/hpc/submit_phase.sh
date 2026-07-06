@@ -28,7 +28,8 @@ CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-50}
 
 mkdir -p "${RESULTS_DIR}" "${CHECKPOINT_DIR}" logs/
 
-module load python/3.11
+unset PYTHONPATH
+module load python/3.10
 source venv/bin/activate
 
 python -m hpc.worker \
