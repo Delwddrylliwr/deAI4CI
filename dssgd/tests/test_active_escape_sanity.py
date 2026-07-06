@@ -10,7 +10,6 @@ Tests in order (as specified in §6 of the implementation plan):
 7.  classify_regime and critical_level against default parameters
 8.  Smoke test: run_active_escape_simulation with tiny config
 """
-from __future__ import annotations
 
 import math
 import pickle

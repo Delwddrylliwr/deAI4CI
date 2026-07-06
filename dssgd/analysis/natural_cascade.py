@@ -10,12 +10,11 @@ relative to t_nucleation (the round at which the first leaf entered B).
 
 Supports per-leaf loss functions for heterogeneous-landscape experiments (NMH-6).
 """
-from __future__ import annotations
 
 import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -122,14 +121,14 @@ class NaturalCascadeRun:
     regime: str
     ell_c: int
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: Union[str, Path]) -> None:
         p_obj = Path(path)
         p_obj.parent.mkdir(parents=True, exist_ok=True)
         with open(p_obj, "wb") as f:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
-    def load(cls, path: str | Path) -> "NaturalCascadeRun":
+    def load(cls, path: Union[str, Path]) -> "NaturalCascadeRun":
         with open(path, "rb") as f:
             return pickle.load(f)
 

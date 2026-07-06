@@ -8,7 +8,6 @@ Run all experiments (or a subset) and save results and plots:
 Experiments run in priority order A → D → B → E → C.
 Experiment C is skipped by default (very long runs: 10⁴ measurement rounds).
 """
-from __future__ import annotations
 
 import argparse
 import pickle

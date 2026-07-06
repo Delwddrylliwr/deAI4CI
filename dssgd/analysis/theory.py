@@ -7,7 +7,6 @@ Implements formulas from the McKean-Vlasov / Fokker-Planck analysis:
   - Effective temperature and Kramers escape times
   - Uniqueness / ergodicity condition
 """
-from __future__ import annotations
 
 import math
 from typing import Dict, List, Optional

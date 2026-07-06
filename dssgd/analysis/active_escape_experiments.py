@@ -17,7 +17,6 @@ With p=2 (sparse Safari regime): γmp=8, γ_1=2, γ_5=0.125.
   Regime II:  0.5 ≤ a < 8
   Critical curvature a_c = 8 (II→III transition).
 """
-from __future__ import annotations
 
 import math
 from typing import List, Optional

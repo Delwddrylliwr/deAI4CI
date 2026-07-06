@@ -7,7 +7,6 @@ shells, identified via k-core decomposition.
 The topology interface matches all other static topologies: step() returns
 (graph, Metropolis-Hastings mixing matrix) and is constant across rounds.
 """
-from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 

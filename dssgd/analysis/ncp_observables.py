@@ -3,7 +3,6 @@
 All functions operate on shell_traj ({shell: (T, d_param)}) computed by
 ncp_runner.compute_shell_trajs().  Pure functions — no simulation state.
 """
-from __future__ import annotations
 
 import math
 from typing import Dict, List, Optional

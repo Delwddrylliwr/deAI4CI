@@ -9,7 +9,6 @@ one of the five experiments in the dynamics specification:
   D — decomposition consistency (centroid/fluctuation autocorrelations)
   E — heterogeneity sensitivity (hierarchical / homogeneous / i.i.d. data)
 """
-from __future__ import annotations
 
 import functools
 import math

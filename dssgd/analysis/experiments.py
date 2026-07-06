@@ -8,7 +8,6 @@ Run a single suite:
     from analysis.simulation import run_nmh_simulation
     runs = [run_nmh_simulation(c) for c in depth_sweep()]
 """
-from __future__ import annotations
 
 import functools
 from typing import List

@@ -8,7 +8,6 @@ Fast tests (< 60 s) that verify:
   5. run_catchup_simulation smoke test (short warmup + measurement, picklable)
   6. run_sanity_checks passes without raising
 """
-from __future__ import annotations
 
 import math
 import pickle

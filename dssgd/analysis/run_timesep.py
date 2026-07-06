@@ -10,7 +10,6 @@ Priority order (spec §14): NMH-1 → NMH-1b → NMH-3 → NCP-1.
 NCP-1 is a graph-only check (no simulation); all others run the full
 natural-cascade runner.
 """
-from __future__ import annotations
 
 import argparse
 import csv

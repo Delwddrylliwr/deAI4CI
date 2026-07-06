@@ -6,7 +6,6 @@ Pure numpy — no external statistics libraries required.  Estimates:
   - Stationary within-module variance (relevant in the training / SDE regime)
   - Multi-seed averaging utilities
 """
-from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 

@@ -9,7 +9,6 @@ NCP-3: Decoupling parameter profile χ_k
 NCP-4: Multi-layer cascade suppression (propagation matrix)
 NCP-5: Stationary distribution factorisation (conditional mutual information)
 """
-from __future__ import annotations
 
 from typing import List, Optional
 

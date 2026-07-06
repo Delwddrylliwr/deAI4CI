@@ -12,7 +12,6 @@ Options:
     --no-plots    Save results only; skip rendering figures
     --n-seeds     Number of random seeds per configuration (default: 3)
 """
-from __future__ import annotations
 
 import argparse
 import dataclasses

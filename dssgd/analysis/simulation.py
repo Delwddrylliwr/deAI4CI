@@ -4,7 +4,6 @@ Wraps the dssgd Agent / Simulator infrastructure with hierarchy-level
 bookkeeping: per-level consensus distances, parameter snapshots, spectral
 gaps, and gradient-noise estimation for effective-temperature calculations.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional

@@ -4,7 +4,6 @@ Each function produces one matplotlib Figure and returns it; saving is the
 caller's responsibility (see run_all.py).  Functions are organised to match
 the paper's claims section by section.
 """
-from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence
 

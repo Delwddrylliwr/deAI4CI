@@ -1,5 +1,4 @@
 """Visualisation functions for NMH active-escape dynamics experiments (v2)."""
-from __future__ import annotations
 
 import math
 from typing import Dict, List, Optional, Tuple

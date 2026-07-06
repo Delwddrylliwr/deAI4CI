@@ -13,13 +13,12 @@ This supersedes the passive-perturbation catch-up experiment (catchup.py),
 which measured t_50 without a genuine barrier and was confounded by graph
 distance.
 """
-from __future__ import annotations
 
 import math
 import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -366,14 +365,14 @@ class ActiveEscapeRun:
     regime: str
     ell_c: int
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: Union[str, Path]) -> None:
         p_obj = Path(path)
         p_obj.parent.mkdir(parents=True, exist_ok=True)
         with open(p_obj, "wb") as f:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
-    def load(cls, path: str | Path) -> "ActiveEscapeRun":
+    def load(cls, path: Union[str, Path]) -> "ActiveEscapeRun":
         with open(path, "rb") as f:
             return pickle.load(f)
 

@@ -9,7 +9,6 @@ Run all experiments (or a subset) and save results and plots:
 
 Experiments run in priority order A1 → A2 → A3 → B.
 """
-from __future__ import annotations
 
 import argparse
 import csv

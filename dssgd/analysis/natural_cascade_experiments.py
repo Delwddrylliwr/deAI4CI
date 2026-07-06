@@ -21,7 +21,6 @@ Basin-symmetry requirements (see plan):
   - NMH-6: b≈0.01 (weak bias; quasi-stationary before absorption)
   - NMH-7: b=0 (symmetric; required by Theorem 2 / Gibbs derivation)
 """
-from __future__ import annotations
 
 from typing import List, Optional, Tuple
 

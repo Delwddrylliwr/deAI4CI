@@ -6,7 +6,6 @@ Simulations can be re-analysed without re-running.
 
 Imports reuse stable utilities from active_escape and catchup modules.
 """
-from __future__ import annotations
 
 import math
 from typing import Dict, List, Optional, Tuple

@@ -6,13 +6,12 @@ other leaf's centroid to shift by half the perturbation magnitude is measured
 as t_50.  The theoretical prediction is log₂ t_50(d) = d + const, tested by
 Experiments A-E of the dynamics specification.
 """
-from __future__ import annotations
 
 import math
 import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -92,14 +91,14 @@ class CatchupRun:
     warmup_sigma2: float
     direct_edge_leaves: Optional[set] = None  # target leaf indices with ≥1 direct edge to source
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: Union[str, Path]) -> None:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "wb") as f:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
-    def load(cls, path: str | Path) -> CatchupRun:
+    def load(cls, path: Union[str, Path]) -> "CatchupRun":
         with open(path, "rb") as f:
             return pickle.load(f)
 
@@ -343,7 +342,7 @@ class CatchupSimConfig:
 # ---------------------------------------------------------------------------
 
 
-def run_catchup_simulation(config: CatchupSimConfig) -> CatchupRun:
+def run_catchup_simulation(config: CatchupSimConfig) -> "CatchupRun":
     """Run a two-phase catch-up experiment and return a picklable CatchupRun.
 
     Phase 1 — warmup: standard gossip-SGD for n_warmup rounds.

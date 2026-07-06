@@ -1,5 +1,4 @@
 """Visualisation functions for NMH catch-up dynamics experiments."""
-from __future__ import annotations
 
 import math
 from typing import Dict, List, Optional

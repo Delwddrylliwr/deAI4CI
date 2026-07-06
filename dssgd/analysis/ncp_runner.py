@@ -9,12 +9,11 @@ The clamped_shell mechanism holds a chosen shell fixed at basin B
 throughout the measurement phase, enabling asymmetric nucleation
 experiments (NCP-2).
 """
-from __future__ import annotations
 
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import networkx as nx
 import numpy as np
@@ -102,14 +101,14 @@ class NCPRun:
     flip_table: List[dict]             # per-node flip info
     graph_stats: dict
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: Union[str, Path]) -> None:
         p_obj = Path(path)
         p_obj.parent.mkdir(parents=True, exist_ok=True)
         with open(p_obj, "wb") as f:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
-    def load(cls, path: str | Path) -> "NCPRun":
+    def load(cls, path: Union[str, Path]) -> "NCPRun":
         with open(path, "rb") as f:
             return pickle.load(f)
 

@@ -4,12 +4,11 @@ AnalysisRun holds all raw outputs from one simulation run.  Save with
 .save(path) and reload with AnalysisRun.load(path) so that statistics and
 plots can be recomputed without re-running.
 """
-from __future__ import annotations
 
 import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 
@@ -83,13 +82,13 @@ class AnalysisRun:
     def n_agents(self) -> int:
         return self.branching ** self.depth * self.leaf_size
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: Union[str, Path]) -> None:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "wb") as f:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
-    def load(cls, path: str | Path) -> AnalysisRun:
+    def load(cls, path: Union[str, Path]) -> "AnalysisRun":
         with open(path, "rb") as f:
             return pickle.load(f)
