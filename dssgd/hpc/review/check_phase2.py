@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Gate 2 review script: nucleation curve, variance decomposition, NCP-2 directionality.
 
 Produces:
@@ -12,8 +13,6 @@ Usage:
       --queue-dir queue/phase2 \\
       --output-dir review/
 """
-from __future__ import annotations
-
 import argparse
 import csv
 import json
@@ -72,7 +71,7 @@ def compute_nmh2_q_l(pkl_dir: Path) -> Dict[float, Tuple[float, float, int]]:
 def _voter_q_l(b: float, theta: float, a: float, leaf_size: int) -> float:
     """Voter-theory nucleation probability (Eq. 14).
 
-    q_l = (1 - exp(-2·θ·(b/a))) / (1 - exp(-2·θ·(b/a)·M))
+    q_l = (1 - exp(-2*θ*(b/a))) / (1 - exp(-2*θ*(b/a)*M))
     where M = leaf_size (level-1 module size = M_0).
     """
     h = theta * (b / max(a, 1e-12))
@@ -289,7 +288,7 @@ def main() -> None:
             for b in b_vals
         ]
         _write_csv(output_dir / "gate2_nmh2_q_l.csv", csv_rows)
-        print(f"NMH-2: chi²={chi2:.2f}, theta_fit={theta_fit:.4f}")
+        print(f"NMH-2: chi^2={chi2:.2f}, theta_fit={theta_fit:.4f}")
     else:
         print(f"  [warn] {nmh2_pkl_dir} not found — skipping NMH-2")
 
@@ -348,7 +347,7 @@ def main() -> None:
         "n_tasks_completed": task_counts.get("completed", 0),
         "n_tasks_failed": task_counts.get("failed", 0),
         "notes": (
-            f"Voter fit chi²={chi2:.2f}. NCP-2 asymmetry ratio={asymmetry_ratio:.2f}."
+            f"Voter fit chi^2={chi2:.2f}. NCP-2 asymmetry ratio={asymmetry_ratio:.2f}."
         ),
     }
 

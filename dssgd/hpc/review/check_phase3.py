@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Gate 3 review script: filter composition, 1/f noise, NCP decoupling, power-law pilot.
 
 Produces:
@@ -13,8 +14,6 @@ Usage:
       --queue-dir queue/phase3 \\
       --output-dir review/
 """
-from __future__ import annotations
-
 import argparse
 import csv
 import json
@@ -181,7 +180,7 @@ def fit_powerlaw_mle(cascade_sizes: List[int], s_min: int = 2) -> Tuple[float, f
         return float("nan"), float("nan")
     log_terms = [math.log(s / (s_min - 0.5)) for s in data]
     tau = 1.0 + n / sum(log_terms)
-    # Standard error: tau_se ≈ (tau - 1) / sqrt(n)
+    # Standard error: tau_se ~ (tau - 1) / sqrt(n)
     tau_se = (tau - 1.0) / math.sqrt(n)
     return tau, tau_se
 
@@ -263,7 +262,7 @@ def main() -> None:
     balance_ok = False
     if nmh7_pkl_dir.exists():
         balance = compute_nmh7_balance(nmh7_pkl_dir)
-        # For b=0 (symmetric), expect ratio ≈ 1 at all distances
+        # For b=0 (symmetric), expect ratio ~ 1 at all distances
         ratios = [r for r, _n in balance.values()]
         balance_ok = bool(ratios) and all(0.5 <= r <= 2.0 for r in ratios)
         csv_rows = [
@@ -311,7 +310,7 @@ def main() -> None:
             _write_csv(output_dir / "gate3_nmh4_pilot.csv", csv_rows)
             tau_lo = tau - 2 * tau_se if not math.isnan(tau_se) else float("nan")
             tau_hi = tau + 2 * tau_se if not math.isnan(tau_se) else float("nan")
-            print(f"NMH-4 pilot τ = {tau:.3f} ± {tau_se:.3f} (95% CI: [{tau_lo:.2f}, {tau_hi:.2f}])")
+            print(f"NMH-4 pilot tau = {tau:.3f} +/- {tau_se:.3f} (95% CI: [{tau_lo:.2f}, {tau_hi:.2f}])")
     else:
         print(f"  [warn] {nmh4_pkl_dir} not found — skipping NMH-4 pilot")
 

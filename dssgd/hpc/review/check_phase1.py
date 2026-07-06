@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Gate 1 review script: verify Phase 1 outputs before submitting Phase 2.
 
 Produces:
@@ -12,8 +13,6 @@ Usage:
       --queue-dir queue/phase1 \\
       --output-dir review/
 """
-from __future__ import annotations
-
 import argparse
 import csv
 import glob
@@ -124,10 +123,10 @@ def compute_nmh3_depths(pkl_dir: Path) -> Dict[float, Tuple[float, float, int]]:
 def estimate_phase_boundaries(
     depths: Dict[float, Tuple[float, float, int]],
 ) -> Tuple[Optional[float], Optional[float]]:
-    """Estimate (II→III boundary) by finding where mean cascade depth drops to ~0.
+    """Estimate (II->III boundary) by finding where mean cascade depth drops to ~0.
 
     Returns (a_boundary_I_II, a_boundary_II_III) — the boundary between Griffiths
-    and paramagnetic phases is where depth → 0.
+    and paramagnetic phases is where depth -> 0.
     """
     sorted_a = sorted(depths)
     boundary_ii_iii = None
@@ -137,7 +136,7 @@ def estimate_phase_boundaries(
         if d0 > 0.5 and d1 < 0.5:
             boundary_ii_iii = (a0 + a1) / 2.0
             break
-    # I→II boundary: where mean depth becomes large (all leaves flip)
+    # I->II boundary: where mean depth becomes large (all leaves flip)
     boundary_i_ii = None
     max_depth = max((d[0] for d in depths.values()), default=0)
     for a in sorted_a:
@@ -259,7 +258,7 @@ def main() -> None:
         _write_csv(output_dir / "gate1_nmh1_slopes.csv", csv_rows)
         print("NMH-1 slopes:")
         for a, (s, se, n) in sorted(nmh1_slopes.items()):
-            flag = " ✓" if not math.isnan(s) and abs(s - 1.0) < 0.15 else " ✗"
+            flag = " OK" if not math.isnan(s) and abs(s - 1.0) < 0.15 else " FAIL"
             print(f"  a={a}: slope={s:.3f} ± {se:.3f} ({n} seeds){flag}")
     else:
         print(f"  [warn] {nmh1_pkl_dir} not found — skipping NMH-1 slopes")
@@ -277,7 +276,7 @@ def main() -> None:
             for a, (m, s, n) in sorted(depths.items())
         ]
         _write_csv(output_dir / "gate1_nmh3_depths.csv", csv_rows)
-        print(f"NMH-3 phase boundaries: I→II ≈ {boundary_i_ii}, II→III ≈ {boundary_ii_iii}")
+        print(f"NMH-3 phase boundaries: I->II ≈ {boundary_i_ii}, II->III ≈ {boundary_ii_iii}")
     else:
         print(f"  [warn] {nmh3_pkl_dir} not found — skipping NMH-3")
 

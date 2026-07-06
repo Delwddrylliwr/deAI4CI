@@ -6,8 +6,6 @@ and verifies:
   - No tasks left in claimed/ (no lost tasks)
   - JSONL output has exactly N_TASKS unique task_ids
 """
-from __future__ import annotations
-
 import json
 import multiprocessing
 import sys

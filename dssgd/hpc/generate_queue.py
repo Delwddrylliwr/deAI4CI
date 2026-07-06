@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Generate sharded task queue for HPC SLURM array jobs.
 
 Usage:
@@ -8,8 +9,6 @@ Usage:
       --gate1-results review/gate1_review.json \\
       --gate2-results review/gate2_review.json
 """
-from __future__ import annotations
-
 import argparse
 import json
 import os
@@ -200,11 +199,11 @@ def build_phase_tasks(
         for cfg in experiment_NMH1(seeds=_seeds(30)):
             tasks.append(_nc_task(cfg, "NMH1", phase, results_root))
 
-        # NMH-1b extended (15 seeds × 4 local_steps values)
+        # NMH-1b extended (15 seeds x 4 local_steps values)
         for cfg in experiment_NMH1b(seeds=_seeds(15)):
             tasks.append(_nc_task(cfg, "NMH1b", phase, results_root))
 
-        # NMH-3 extended (25 seeds × 8 a-values)
+        # NMH-3 extended (25 seeds x 8 a-values)
         for cfg in experiment_NMH3(seeds=_seeds(25)):
             tasks.append(_nc_task(cfg, "NMH3", phase, results_root))
 
@@ -222,7 +221,7 @@ def build_phase_tasks(
             [0.020, 0.025, 0.030, 0.035, 0.040, 0.045, 0.050],
         )
 
-        # NMH-2 (30 seeds × len(b_list) b-values)
+        # NMH-2 (30 seeds x len(b_list) b-values)
         for cfg in experiment_NMH2(b_list=b_list, seeds=_seeds(30)):
             tasks.append(_nc_task(cfg, "NMH2", phase, results_root))
 
@@ -246,7 +245,7 @@ def build_phase_tasks(
             [0.02, 0.03, 0.04, 0.05, 0.06],
         )
 
-        # NMH-5 (50 seeds × 3 a-values × 5 b/a values)
+        # NMH-5 (50 seeds x 3 a-values x 5 b/a values)
         for cfg in experiment_NMH5(b_on_a_list=b_on_a_list, seeds=_seeds(50)):
             tasks.append(_nc_task(cfg, "NMH5", phase, results_root))
 
@@ -266,7 +265,7 @@ def build_phase_tasks(
         phase4_mods = gate_results.get("gate3_phase4_modifications", "")
         depth = 7 if "depth=7" in phase4_mods else 6
 
-        # NMH-4 full (500 seeds × 3 a-values)
+        # NMH-4 full (500 seeds x 3 a-values)
         for a in [1.0, 2.0, 4.0]:
             for cfg in experiment_NMH4(seeds=_seeds(500), depth=depth, a=a):
                 tasks.append(_nc_task(cfg, "NMH4", phase, results_root))
@@ -358,7 +357,7 @@ def load_gate_results(*paths: str) -> Dict[str, Any]:
     for i, path in enumerate(paths, start=1):
         with open(path) as fh:
             data = json.load(fh)
-        # Infer gate number from filename, e.g. "gate1_review.json" → prefix "gate1_"
+        # Infer gate number from filename, e.g. "gate1_review.json" -> prefix "gate1_"
         fname = Path(path).name.lower()
         for n in (1, 2, 3):
             if f"gate{n}" in fname:

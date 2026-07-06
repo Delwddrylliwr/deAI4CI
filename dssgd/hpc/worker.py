@@ -26,8 +26,6 @@ Usage
       --checkpoint-dir results/phase1/checkpoints \\
       --worker-id 0 --shard-id 0
 """
-from __future__ import annotations
-
 import argparse
 import json
 import os

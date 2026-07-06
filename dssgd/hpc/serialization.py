@@ -1,11 +1,10 @@
-"""Config serialization: NaturalCascadeConfig / NCPSimConfig ↔ JSON-safe dicts.
+# -*- coding: utf-8 -*-
+"""Config serialization: NaturalCascadeConfig / NCPSimConfig <-> JSON-safe dicts.
 
 JSON has no numpy array or tuple types, so three fields need special handling:
-  theta_A, theta_B   : Optional[np.ndarray] → null or [float, ...]
-  per_leaf_loss_params: Optional[List[Tuple[float,float]]] → null or [[a,b],...]
+  theta_A, theta_B   : Optional[np.ndarray] -> null or [float, ...]
+  per_leaf_loss_params: Optional[List[Tuple[float,float]]] -> null or [[a,b],...]
 """
-from __future__ import annotations
-
 from typing import Any, Dict, Optional
 
 import numpy as np
