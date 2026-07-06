@@ -1,0 +1,6 @@
+name,a,b,local_steps,seed,depth,warmup_ok,nucleation_leaf,t_nucleation,cascade_depth,regime,ell_c
+NMH1/a=0.5/seed=0,0.5,0.042,50,0,5,True,10,5,5,II,4
+NMH1/a=0.5/seed=1,0.5,0.042,50,1,5,True,5,2,5,II,4
+NMH1/a=0.5/seed=2,0.5,0.042,50,2,5,True,8,0,5,II,4
+NMH1/a=0.5/seed=3,0.5,0.042,50,3,5,True,10,0,5,II,4
+NMH1/a=0.5/seed=4,0.5,0.042,50,4,5,True,26,3,5,II,4

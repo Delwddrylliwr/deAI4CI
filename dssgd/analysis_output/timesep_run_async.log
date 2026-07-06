@@ -1,0 +1,96 @@
+Output: C:\Users\tomwi\Documents\projects\deAI4CI\dssgd\analysis_output
+Experiments: ['NMH1', 'NMH1b', 'NMH3', 'NCP1']
+Seeds: 5
+
+=== NCP-1: Forest Fire shell structure (graph-only) ===
+  240 graph instances
+  [cache] analysis_output\timesep_results\ncp1_graph_stats.csv
+  Plot: analysis_output\timesep_plots\ncp1_shells.png
+
+=== NMH-1: hierarchical mixing-time scaling (slope-1 test) ===
+  5 configs (1 a-values × 5 seeds)
+  [run]   NMH1/a=0.5/seed=0
+  [run]   NMH1/a=0.5/seed=1
+  [run]   NMH1/a=0.5/seed=2
+  [run]   NMH1/a=0.5/seed=3
+  [run]   NMH1/a=0.5/seed=4
+  CSV: analysis_output\timesep_results\nmh1_flip.csv
+  CSV: analysis_output\timesep_results\nmh1_summary.csv
+  warmup failures: 0/5
+  no natural flip detected: 0/5
+  Plot: analysis_output\timesep_plots\nmh1_slope1.png
+
+=== NMH-1b: local_steps sensitivity ===
+  15 configs
+  [run]   NMH1b/ls=10/seed=0
+  [run]   NMH1b/ls=10/seed=1
+  [run]   NMH1b/ls=10/seed=2
+  [run]   NMH1b/ls=10/seed=3
+  [run]   NMH1b/ls=10/seed=4
+  [run]   NMH1b/ls=50/seed=0
+  [run]   NMH1b/ls=50/seed=1
+  [run]   NMH1b/ls=50/seed=2
+  [run]   NMH1b/ls=50/seed=3
+  [run]   NMH1b/ls=50/seed=4
+  [run]   NMH1b/ls=200/seed=0
+  [run]   NMH1b/ls=200/seed=1
+  [run]   NMH1b/ls=200/seed=2
+  [run]   NMH1b/ls=200/seed=3
+  [run]   NMH1b/ls=200/seed=4
+  CSV: analysis_output\timesep_results\nmh1b_flip.csv
+  CSV: analysis_output\timesep_results\nmh1b_summary.csv
+  Plot: analysis_output\timesep_plots\nmh1b_slope1.png
+
+=== NMH-3: three-regime phase structure ===
+  40 configs (8 a-values × 5 seeds)
+  [run]   NMH3/a=0.25/seed=0
+  [warn]  warmup FAILED: NMH3/a=0.25/seed=0
+  [run]   NMH3/a=0.25/seed=1
+  [warn]  warmup FAILED: NMH3/a=0.25/seed=1
+  [run]   NMH3/a=0.25/seed=2
+  [warn]  warmup FAILED: NMH3/a=0.25/seed=2
+  [run]   NMH3/a=0.25/seed=3
+  [warn]  warmup FAILED: NMH3/a=0.25/seed=3
+  [run]   NMH3/a=0.25/seed=4
+  [warn]  warmup FAILED: NMH3/a=0.25/seed=4
+  [run]   NMH3/a=0.5/seed=0
+  [run]   NMH3/a=0.5/seed=1
+  [run]   NMH3/a=0.5/seed=2
+  [run]   NMH3/a=0.5/seed=3
+  [run]   NMH3/a=0.5/seed=4
+  [run]   NMH3/a=1.0/seed=0
+  [run]   NMH3/a=1.0/seed=1
+  [run]   NMH3/a=1.0/seed=2
+  [run]   NMH3/a=1.0/seed=3
+  [run]   NMH3/a=1.0/seed=4
+  [run]   NMH3/a=2.0/seed=0
+  [run]   NMH3/a=2.0/seed=1
+  [run]   NMH3/a=2.0/seed=2
+  [run]   NMH3/a=2.0/seed=3
+  [run]   NMH3/a=2.0/seed=4
+  [run]   NMH3/a=4.0/seed=0
+  [run]   NMH3/a=4.0/seed=1
+  [run]   NMH3/a=4.0/seed=2
+  [run]   NMH3/a=4.0/seed=3
+  [run]   NMH3/a=4.0/seed=4
+  [run]   NMH3/a=8.0/seed=0
+  [run]   NMH3/a=8.0/seed=1
+  [run]   NMH3/a=8.0/seed=2
+  [run]   NMH3/a=8.0/seed=3
+  [run]   NMH3/a=8.0/seed=4
+  [run]   NMH3/a=12.0/seed=0
+  [run]   NMH3/a=12.0/seed=1
+  [run]   NMH3/a=12.0/seed=2
+  [run]   NMH3/a=12.0/seed=3
+  [run]   NMH3/a=12.0/seed=4
+  [run]   NMH3/a=16.0/seed=0
+  [run]   NMH3/a=16.0/seed=1
+  [run]   NMH3/a=16.0/seed=2
+  [run]   NMH3/a=16.0/seed=3
+  [run]   NMH3/a=16.0/seed=4
+  CSV: analysis_output\timesep_results\nmh3_flip.csv
+  CSV: analysis_output\timesep_results\nmh3_summary.csv
+  [warn] 5/40 warmup failures
+  Plot: analysis_output\timesep_plots\nmh3_phase.png
+
+Done.  Results: analysis_output\timesep_results  Plots: analysis_output\timesep_plots

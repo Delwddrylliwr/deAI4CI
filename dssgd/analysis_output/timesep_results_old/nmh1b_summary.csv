@@ -1,0 +1,16 @@
+name,a,b,local_steps,seed,depth,warmup_ok,nucleation_leaf,t_nucleation,cascade_depth,regime,ell_c
+NMH1b/ls=10/seed=0,0.5,0.042,10,0,5,True,,,,II,4
+NMH1b/ls=10/seed=1,0.5,0.042,10,1,5,True,4,7,5,II,4
+NMH1b/ls=10/seed=2,0.5,0.042,10,2,5,True,8,11,5,II,4
+NMH1b/ls=10/seed=3,0.5,0.042,10,3,5,True,10,0,0,II,4
+NMH1b/ls=10/seed=4,0.5,0.042,10,4,5,True,,,,II,4
+NMH1b/ls=50/seed=0,0.5,0.042,50,0,5,True,12,0,5,II,4
+NMH1b/ls=50/seed=1,0.5,0.042,50,1,5,True,5,4,5,II,4
+NMH1b/ls=50/seed=2,0.5,0.042,50,2,5,True,8,0,5,II,4
+NMH1b/ls=50/seed=3,0.5,0.042,50,3,5,True,10,0,5,II,4
+NMH1b/ls=50/seed=4,0.5,0.042,50,4,5,True,24,5,5,II,4
+NMH1b/ls=200/seed=0,0.5,0.042,200,0,5,True,12,0,5,II,4
+NMH1b/ls=200/seed=1,0.5,0.042,200,1,5,True,5,2,5,II,4
+NMH1b/ls=200/seed=2,0.5,0.042,200,2,5,True,8,0,5,II,4
+NMH1b/ls=200/seed=3,0.5,0.042,200,3,5,True,10,0,5,II,4
+NMH1b/ls=200/seed=4,0.5,0.042,200,4,5,True,24,3,5,II,4
