@@ -30,9 +30,8 @@ mkdir -p "${RESULTS_DIR}" "${CHECKPOINT_DIR}" logs/
 
 unset PYTHONPATH
 module load python/3.10
-source venv/bin/activate
 
-python -m hpc.worker \
+venv/bin/python -m hpc.worker \
     --queue-dir    "${QUEUE_DIR}" \
     --results-dir  "${RESULTS_DIR}" \
     --checkpoint-dir "${CHECKPOINT_DIR}" \
