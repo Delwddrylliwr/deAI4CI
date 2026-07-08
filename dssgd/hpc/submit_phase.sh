@@ -13,6 +13,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
+#SBATCH --constraint=1LM
 #SBATCH --time=72:00:00
 #SBATCH --output=logs/worker_%A_%a.out
 #SBATCH --error=logs/worker_%A_%a.err
