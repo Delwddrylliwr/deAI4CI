@@ -29,10 +29,12 @@ CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-50}
 
 mkdir -p "${RESULTS_DIR}" "${CHECKPOINT_DIR}" logs/
 
-unset PYTHONPATH
-module load python/3.10
+#unset PYTHONPATH
+module load python3/3.10.5
+module load openssl/1.1.1p
+python3 -m pip install -e ".[dev]"
 
-venv/bin/python -m hpc.worker \
+python3 -m hpc.worker \
     --queue-dir    "${QUEUE_DIR}" \
     --results-dir  "${RESULTS_DIR}" \
     --checkpoint-dir "${CHECKPOINT_DIR}" \
