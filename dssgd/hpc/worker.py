@@ -750,7 +750,12 @@ def complete_task(claimed_path: Path, queue_root: Path) -> None:
     shard_name = claimed_path.parent.name
     dest_dir = queue_root / "completed" / shard_name
     dest_dir.mkdir(parents=True, exist_ok=True)
-    os.rename(str(claimed_path), str(dest_dir / claimed_path.name))
+    try:
+        os.rename(str(claimed_path), str(dest_dir / claimed_path.name))
+    except FileNotFoundError:
+        # File was moved by external recovery (e.g. manual claimed→pending sweep)
+        # while this worker held it. Work is done; just log and continue.
+        print(f"[warn] claimed file already moved: {claimed_path.name}", flush=True)
 
 
 def fail_task(claimed_path: Path, queue_root: Path, error_msg: str) -> None:
@@ -758,7 +763,11 @@ def fail_task(claimed_path: Path, queue_root: Path, error_msg: str) -> None:
     dest_dir = queue_root / "failed" / shard_name
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / claimed_path.name
-    os.rename(str(claimed_path), str(dest))
+    try:
+        os.rename(str(claimed_path), str(dest))
+    except FileNotFoundError:
+        print(f"[warn] claimed file already moved: {claimed_path.name}", flush=True)
+        return
     with open(dest.with_suffix(".err"), "w") as fh:
         fh.write(error_msg)
 
@@ -856,16 +865,13 @@ def worker_main(
         try:
             summary = run_task(task, results_dir, checkpoint_dir)
             buffer.append(_jsonl_line(task, summary))
-            if len(buffer) >= flush_every:
-                _atomic_append_lines(jsonl_path, buffer)
-                buffer.clear()
+            _atomic_append_lines(jsonl_path, buffer)
+            buffer.clear()
             complete_task(claimed_path, queue_root)
         except Exception:
             error_msg = traceback.format_exc()
             fail_task(claimed_path, queue_root, error_msg)
 
-    if buffer:
-        _atomic_append_lines(jsonl_path, buffer)
 
 
 # ---------------------------------------------------------------------------

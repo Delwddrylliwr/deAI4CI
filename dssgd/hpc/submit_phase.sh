@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Submit one phase of timesep experiments as a SLURM array job.
 #
-# Usage:
+# Usage (create logs/ first — SLURM opens output files before the script runs):
+#   mkdir -p logs/
 #   PHASE=1 sbatch hpc/submit_phase.sh
 #   PHASE=2 QUEUE_DIR=queue/phase2 sbatch hpc/submit_phase.sh
 #
