@@ -10,10 +10,9 @@
 
 #SBATCH --job-name=timesep_phase
 #SBATCH --array=0-99
+#SBATCH --nvram-options=1LM:1000
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
-#SBATCH --constraint=1LM
 #SBATCH --time=72:00:00
 #SBATCH --output=logs/worker_%A_%a.out
 #SBATCH --error=logs/worker_%A_%a.err
@@ -32,7 +31,6 @@ mkdir -p "${RESULTS_DIR}" "${CHECKPOINT_DIR}" logs/
 #unset PYTHONPATH
 module load python3/3.10.5
 module load openssl/1.1.1p
-python3 -m pip install -e ".[dev]"
 
 python3 -m hpc.worker \
     --queue-dir    "${QUEUE_DIR}" \
