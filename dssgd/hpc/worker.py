@@ -890,6 +890,8 @@ def main() -> None:
     parser.add_argument("--n-shards", type=int, default=100)
     parser.add_argument("--checkpoint-every", type=int, default=50)
     parser.add_argument("--flush-every", type=int, default=10)
+    parser.add_argument("--max-empty-retries", type=int, default=3)
+    parser.add_argument("--retry-sleep", type=float, default=30.0)
     args = parser.parse_args()
 
     shard_id = args.shard_id if args.shard_id is not None else args.worker_id % args.n_shards
@@ -904,6 +906,8 @@ def main() -> None:
         n_shards=args.n_shards,
         checkpoint_every=args.checkpoint_every,
         flush_every=args.flush_every,
+        max_empty_retries=args.max_empty_retries,
+        retry_sleep=args.retry_sleep,
     )
 
 
