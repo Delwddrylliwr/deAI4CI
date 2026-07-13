@@ -20,6 +20,12 @@ Basin-symmetry requirements (see plan):
   - NMH-2: sweep b to vary saddle position θ_s
   - NMH-6: b≈0.01 (weak bias; quasi-stationary before absorption)
   - NMH-7: b=0 (symmetric; required by Theorem 2 / Gibbs derivation)
+
+gossip_protocol parameter (all functions):
+  "async_poisson"  — AsynchronousGossip (default; Phase xA)
+  "synchronous"    — GossipAveraging (Phase xS)
+  When "synchronous", the experiment name prefix gains an "S" suffix
+  (e.g. "NMH1S/", "NMH1bS/") so async and sync results live in separate dirs.
 """
 
 from typing import List, Optional, Tuple
@@ -45,6 +51,7 @@ def experiment_NMH1(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 1000,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NaturalCascadeConfig]:
     """Primary slope-1 test: log₂(T_flip(d)) linear in d with slope ≈ 1.
 
@@ -54,11 +61,12 @@ def experiment_NMH1(
     Uses force_flip_source=True (one random leaf set to B post-warmup) so
     that cascade propagation is driven purely by gossip without thermal noise.
     """
+    prefix = "NMH1S" if gossip_protocol != "async_poisson" else "NMH1"
     configs = []
     for a in a_list:
         for seed in seeds:
             configs.append(NaturalCascadeConfig(
-                name=f"NMH1/a={a}/seed={seed}",
+                name=f"{prefix}/a={a}/seed={seed}",
                 depth=depth,
                 leaf_size=leaf_size,
                 p=p,
@@ -71,6 +79,7 @@ def experiment_NMH1(
                 b=b,
                 force_flip_source=True,
                 flip_noise_scale=0.0,
+                gossip_protocol=gossip_protocol,
             ))
     return configs
 
@@ -91,6 +100,7 @@ def experiment_NMH1b(
     lr: float = 0.1,
     n_warmup: int = 400,
     n_meas: int = 1000,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NaturalCascadeConfig]:
     """Regime C sensitivity: slope-1 accuracy as function of local_steps.
 
@@ -98,11 +108,12 @@ def experiment_NMH1b(
     below it, Regime A/B contamination introduces drift.
     Force-flip source so that the cascade is gossip-driven across all local_steps values.
     """
+    prefix = "NMH1bS" if gossip_protocol != "async_poisson" else "NMH1b"
     configs = []
     for ls in local_steps_list:
         for seed in seeds:
             configs.append(NaturalCascadeConfig(
-                name=f"NMH1b/ls={ls}/seed={seed}",
+                name=f"{prefix}/ls={ls}/seed={seed}",
                 depth=depth,
                 leaf_size=leaf_size,
                 p=p,
@@ -115,6 +126,7 @@ def experiment_NMH1b(
                 b=b,
                 force_flip_source=True,
                 flip_noise_scale=0.0,
+                gossip_protocol=gossip_protocol,
             ))
     return configs
 
@@ -135,6 +147,7 @@ def experiment_NMH2(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 1000,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NaturalCascadeConfig]:
     """Nucleation probability q_l as function of basin bias b.
 
@@ -144,11 +157,12 @@ def experiment_NMH2(
     Natural nucleation (no force-flip): small Langevin noise enables escape
     so that the rate varies measurably across b values.
     """
+    prefix = "NMH2S" if gossip_protocol != "async_poisson" else "NMH2"
     configs = []
     for b in b_list:
         for seed in seeds:
             configs.append(NaturalCascadeConfig(
-                name=f"NMH2/b={b:.4f}/seed={seed}",
+                name=f"{prefix}/b={b:.4f}/seed={seed}",
                 depth=depth,
                 leaf_size=leaf_size,
                 p=p,
@@ -160,6 +174,7 @@ def experiment_NMH2(
                 a=a,
                 b=b,
                 flip_noise_scale=0.10,
+                gossip_protocol=gossip_protocol,
             ))
     return configs
 
@@ -180,6 +195,7 @@ def experiment_NMH3(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 1000,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NaturalCascadeConfig]:
     """Phase structure test: ferromagnetic / Griffiths / paramagnetic regimes.
 
@@ -195,11 +211,12 @@ def experiment_NMH3(
     """
     if a_list is None:
         a_list = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 12.0, 16.0]
+    prefix = "NMH3S" if gossip_protocol != "async_poisson" else "NMH3"
     configs = []
     for a in a_list:
         for seed in seeds:
             configs.append(NaturalCascadeConfig(
-                name=f"NMH3/a={a}/seed={seed}",
+                name=f"{prefix}/a={a}/seed={seed}",
                 depth=depth,
                 leaf_size=leaf_size,
                 p=p,
@@ -212,6 +229,7 @@ def experiment_NMH3(
                 b=b,
                 force_flip_source=True,
                 flip_noise_scale=0.0,
+                gossip_protocol=gossip_protocol,
             ))
     return configs
 
@@ -233,6 +251,7 @@ def experiment_NMH4(
     n_warmup: int = 400,
     n_meas: int = 800,
     t_horizon: int = 600,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NaturalCascadeConfig]:
     """Cascade size distribution: P(size=s) ~ s^{-τ} in the Griffiths phase.
 
@@ -241,10 +260,11 @@ def experiment_NMH4(
     a=2 is in the middle of the Griffiths regime (0.5 ≤ a < 8 for p=2).
     Force-flip source so cascade size reflects gossip propagation, not nucleation.
     """
+    prefix = "NMH4S" if gossip_protocol != "async_poisson" else "NMH4"
     configs = []
     for seed in seeds:
         configs.append(NaturalCascadeConfig(
-            name=f"NMH4/seed={seed}",
+            name=f"{prefix}/seed={seed}",
             depth=depth,
             leaf_size=leaf_size,
             p=p,
@@ -258,6 +278,7 @@ def experiment_NMH4(
             t_horizon=t_horizon,
             force_flip_source=True,
             flip_noise_scale=0.0,
+            gossip_protocol=gossip_protocol,
         ))
     return configs
 
@@ -278,6 +299,7 @@ def experiment_NMH5(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 1000,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NaturalCascadeConfig]:
     """Filter composition: propagation depth d_prop as function of b/a.
 
@@ -286,13 +308,14 @@ def experiment_NMH5(
     further) with a sharp threshold at the deepest level geometric filter.
     Force-flip source so propagation depth reflects gossip filter attenuation.
     """
+    prefix = "NMH5S" if gossip_protocol != "async_poisson" else "NMH5"
     configs = []
     for a in a_list:
         for b_on_a in b_on_a_list:
             b = b_on_a * a
             for seed in seeds:
                 configs.append(NaturalCascadeConfig(
-                    name=f"NMH5/a={a}/b_on_a={b_on_a:.3f}/seed={seed}",
+                    name=f"{prefix}/a={a}/b_on_a={b_on_a:.3f}/seed={seed}",
                     depth=depth,
                     leaf_size=leaf_size,
                     p=p,
@@ -305,6 +328,7 @@ def experiment_NMH5(
                     b=b,
                     force_flip_source=True,
                     flip_noise_scale=0.0,
+                    gossip_protocol=gossip_protocol,
                 ))
     return configs
 
@@ -326,6 +350,7 @@ def experiment_NMH6(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 2000,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NaturalCascadeConfig]:
     """Stationary variance decomposition with heterogeneous per-leaf loss.
 
@@ -339,6 +364,7 @@ def experiment_NMH6(
     """
     branching = 2
     n_leaf_types = branching ** depth
+    prefix = "NMH6S" if gossip_protocol != "async_poisson" else "NMH6"
     configs = []
     for seed in seeds:
         rng = np.random.default_rng(seed + 99991)  # independent of simulation seed
@@ -346,7 +372,7 @@ def experiment_NMH6(
         b_vals = np.clip(b_vals, 0.005, 0.035).tolist()
         per_leaf_loss_params = [(a_base, float(b_i)) for b_i in b_vals]
         configs.append(NaturalCascadeConfig(
-            name=f"NMH6/seed={seed}",
+            name=f"{prefix}/seed={seed}",
             depth=depth,
             leaf_size=leaf_size,
             p=p,
@@ -359,6 +385,7 @@ def experiment_NMH6(
             b=b_base,
             per_leaf_loss_params=per_leaf_loss_params,
             flip_noise_scale=0.10,
+            gossip_protocol=gossip_protocol,
         ))
     return configs
 
@@ -378,6 +405,7 @@ def experiment_NMH7(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 4000,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NaturalCascadeConfig]:
     """Detailed balance and Gibbs measure test.  Requires b=0 (symmetric).
 
@@ -389,10 +417,11 @@ def experiment_NMH7(
     n_meas=4000 (longer run) for accurate rate estimates.
     Smaller depth=4 to keep per-run cost manageable.
     """
+    prefix = "NMH7S" if gossip_protocol != "async_poisson" else "NMH7"
     configs = []
     for seed in seeds:
         configs.append(NaturalCascadeConfig(
-            name=f"NMH7/seed={seed}",
+            name=f"{prefix}/seed={seed}",
             depth=depth,
             leaf_size=leaf_size,
             p=p,
@@ -404,5 +433,6 @@ def experiment_NMH7(
             a=a,
             b=0.0,           # symmetric basins: required by Theorem 2
             flip_noise_scale=0.10,
+            gossip_protocol=gossip_protocol,
         ))
     return configs

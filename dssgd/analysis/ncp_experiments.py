@@ -8,6 +8,12 @@ NCP-2: Asymmetric nucleation between shells (clamped_shell configs)
 NCP-3: Decoupling parameter profile χ_k
 NCP-4: Multi-layer cascade suppression (propagation matrix)
 NCP-5: Stationary distribution factorisation (conditional mutual information)
+
+gossip_protocol parameter (NCP-2 through NCP-5):
+  "async_poisson"  — AsynchronousGossip (default; Phase xA)
+  "synchronous"    — GossipAveraging (Phase xS)
+  When "synchronous", the experiment name prefix gains an "S" suffix.
+  NCP-1 is graph-only (no gossip) and has no gossip_protocol parameter.
 """
 
 from typing import List, Optional
@@ -68,6 +74,7 @@ def experiment_NCP2(
     n_warmup: int = 400,
     n_meas: int = 800,
     clamped_shell: Optional[int] = None,  # None = auto-select innermost shell
+    gossip_protocol: str = "async_poisson",
 ) -> List[NCPSimConfig]:
     """Asymmetric nucleation: outward (core→periphery) vs inward (periphery→core).
 
@@ -83,10 +90,11 @@ def experiment_NCP2(
     pass them as clamped_shell.  This factory generates configs with a
     placeholder that callers replace after inspecting the graph.
     """
+    prefix = "NCP2S" if gossip_protocol != "async_poisson" else "NCP2"
     configs = []
     for seed in seeds:
         configs.append(NCPSimConfig(
-            name=f"NCP2/p_f={p_f}/seed={seed}/clamp={'auto' if clamped_shell is None else clamped_shell}",
+            name=f"{prefix}/p_f={p_f}/seed={seed}/clamp={'auto' if clamped_shell is None else clamped_shell}",
             n_nodes=n_nodes,
             p_f=p_f,
             r=r,
@@ -98,6 +106,7 @@ def experiment_NCP2(
             a=a,
             b=b,
             clamped_shell=clamped_shell,
+            gossip_protocol=gossip_protocol,
         ))
     return configs
 
@@ -118,16 +127,18 @@ def experiment_NCP3(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 800,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NCPSimConfig]:
     """Decoupling parameter χ_k profile across shells.
 
     Tests Theorem 4, Equation (35): χ_k grows with shell outermost-ness.
     Free run (no clamped_shell); stationarity is reached by long n_meas.
     """
+    prefix = "NCP3S" if gossip_protocol != "async_poisson" else "NCP3"
     configs = []
     for seed in seeds:
         configs.append(NCPSimConfig(
-            name=f"NCP3/p_f={p_f}/seed={seed}",
+            name=f"{prefix}/p_f={p_f}/seed={seed}",
             n_nodes=n_nodes,
             p_f=p_f,
             r=r,
@@ -138,6 +149,7 @@ def experiment_NCP3(
             local_steps=local_steps,
             a=a,
             b=b,
+            gossip_protocol=gossip_protocol,
         ))
     return configs
 
@@ -158,6 +170,7 @@ def experiment_NCP4(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 800,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NCPSimConfig]:
     """Multi-layer cascade suppression: propagation matrix.
 
@@ -165,10 +178,11 @@ def experiment_NCP4(
     core with probability ∏_k 1/|S_k|, super-exponentially small.
     200 seeds per source-shell (callers set clamped_shell after graph inspection).
     """
+    prefix = "NCP4S" if gossip_protocol != "async_poisson" else "NCP4"
     configs = []
     for seed in seeds:
         configs.append(NCPSimConfig(
-            name=f"NCP4/p_f={p_f}/seed={seed}",
+            name=f"{prefix}/p_f={p_f}/seed={seed}",
             n_nodes=n_nodes,
             p_f=p_f,
             r=r,
@@ -179,6 +193,7 @@ def experiment_NCP4(
             local_steps=local_steps,
             a=a,
             b=b,
+            gossip_protocol=gossip_protocol,
         ))
     return configs
 
@@ -199,16 +214,18 @@ def experiment_NCP5(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 3000,
+    gossip_protocol: str = "async_poisson",
 ) -> List[NCPSimConfig]:
     """Factorisation test: I(B_k ; B_{k+2} | B_{k+1}) ≈ 0.
 
     Tests Theorem 4, Equation (33).  Long n_meas=3000 for CMI estimation
     accuracy.  Few seeds (10) since each run is long.
     """
+    prefix = "NCP5S" if gossip_protocol != "async_poisson" else "NCP5"
     configs = []
     for seed in seeds:
         configs.append(NCPSimConfig(
-            name=f"NCP5/p_f={p_f}/seed={seed}",
+            name=f"{prefix}/p_f={p_f}/seed={seed}",
             n_nodes=n_nodes,
             p_f=p_f,
             r=r,
@@ -219,5 +236,6 @@ def experiment_NCP5(
             local_steps=local_steps,
             a=a,
             b=b,
+            gossip_protocol=gossip_protocol,
         ))
     return configs

@@ -1,20 +1,28 @@
 # -*- coding: utf-8 -*-
 """Generate sharded task queue for HPC SLURM array jobs.
 
+Phase ID convention:
+  "1a" / 1  — Phase 1A: async gossip (existing Phase 1 queue)
+  "1s"      — Phase 1S: synchronous gossip mirror of Phase 1A
+  "2a" / 2  — Phase 2A: async gossip
+  "2s"      — Phase 2S: synchronous gossip mirror
+  (same pattern for 3a/3s, 4a/4s)
+
+Integer phase IDs 1–4 are accepted as aliases for "1a"–"4a" (backwards compat).
+Default queue/results directories are queue/phase{id}/ and results/phase{id}/,
+so --phase 1s automatically uses queue/phase1s/ and results/phase1s/.
+
 Usage:
-  python -m hpc.generate_queue --phase 1 --queue-dir queue/phase1
-  python -m hpc.generate_queue --phase 2 --queue-dir queue/phase2 \\
-      --gate1-results review/gate1_review.json
-  python -m hpc.generate_queue --phase 3 --queue-dir queue/phase3 \\
-      --gate1-results review/gate1_review.json \\
-      --gate2-results review/gate2_review.json
+  python -m hpc.generate_queue --phase 1  --queue-dir queue/phase1
+  python -m hpc.generate_queue --phase 1s --queue-dir queue/phase1s
+  python -m hpc.generate_queue --phase 2a --gate1-results review/gate1_review.json
 """
 import argparse
 import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 # Allow running as `python -m hpc.generate_queue` from dssgd/ directory.
 _HERE = Path(__file__).parent.parent
@@ -48,8 +56,14 @@ from hpc.serialization import config_to_dict, task_id_from_config
 N_SHARDS = 100
 CHECKPOINT_EVERY_DEFAULT = 50
 
+_VALID_PHASES = {"1a", "1s", "2a", "2s", "3a", "3s", "4a", "4s"}
+_INT_ALIAS = {1: "1a", 2: "2a", 3: "3a", 4: "4a"}
+
 # Estimated wall-clock hours per task (used for duration-balanced shard assignment).
+# S-variant estimates are approximately 2× their A counterparts because
+# GossipAveraging updates all N agents every gradient step vs ~2.56 events for async.
 EXPERIMENT_HOURS: Dict[str, float] = {
+    # Phase 1A / 2A / 3A / 4A
     "NMH1": 0.5,
     "NMH1b": 0.5,
     "NMH2": 0.6,
@@ -67,6 +81,22 @@ EXPERIMENT_HOURS: Dict[str, float] = {
     "NCP4": 0.8,
     "NCP5": 68.0,
     "Comparative": 0.5,
+    # Phase 1S / 2S / 3S / 4S (synchronous gossip mirrors)
+    "NMH1S": 1.0,
+    "NMH1bS": 1.0,
+    "NMH3S": 1.0,
+    "NMH2S": 1.2,
+    "NMH2bS": 1.2,
+    "NMH6S": 2.4,
+    "NCP2S": 1.6,
+    "NMH5S": 1.0,
+    "NMH7S": 4.0,
+    "NCP3S": 1.6,
+    "NMH4S_pilot": 9.3,
+    "NMH4S": 18.6,
+    "NCP4S": 1.6,
+    "NCP5S": 136.0,
+    "ComparativeS": 1.0,
 }
 
 # ---------------------------------------------------------------------------
@@ -77,7 +107,7 @@ EXPERIMENT_HOURS: Dict[str, float] = {
 def _nc_task(
     config,
     experiment: str,
-    phase: int,
+    phase: Union[str, int],
     results_root: Path,
     checkpoint_every: int = CHECKPOINT_EVERY_DEFAULT,
 ) -> Dict[str, Any]:
@@ -98,7 +128,7 @@ def _nc_task(
 def _ncp_task(
     config,
     experiment: str,
-    phase: int,
+    phase: Union[str, int],
     results_root: Path,
     checkpoint_every: int = CHECKPOINT_EVERY_DEFAULT,
 ) -> Dict[str, Any]:
@@ -116,7 +146,7 @@ def _ncp_task(
     }
 
 
-def _ncp1_task(config, phase: int) -> Dict[str, Any]:
+def _ncp1_task(config, phase: Union[str, int]) -> Dict[str, Any]:
     """NCP-1 is graph-structure only — no simulation, no checkpoint, no pkl."""
     task_id = task_id_from_config(config)
     return {
@@ -138,10 +168,11 @@ def _ncp1_task(config, phase: int) -> Dict[str, Any]:
 
 def _build_ncp2_tasks_with_clamping(
     seeds: List[int],
-    phase: int,
+    phase: Union[str, int],
     results_root: Path,
     n_nodes: int = 1000,
     p_f: float = 0.37,
+    gossip_protocol: str = "async_poisson",
 ) -> List[Dict[str, Any]]:
     """Build NCP-2 tasks with clamped_shell baked in from a reference graph.
 
@@ -150,6 +181,7 @@ def _build_ncp2_tasks_with_clamping(
     create two tasks per seed: one clamping the innermost shell (outward cascade)
     and one clamping the outermost shell (inward cascade).
     """
+    exp_name = "NCP2S" if gossip_protocol != "async_poisson" else "NCP2"
     tasks = []
     for seed in seeds:
         topo = ForestFireTopology(n=n_nodes, p_f=p_f, seed=seed)
@@ -164,18 +196,34 @@ def _build_ncp2_tasks_with_clamping(
                 n_nodes=n_nodes,
                 p_f=p_f,
                 clamped_shell=clamped,
+                gossip_protocol=gossip_protocol,
             )
             for cfg in configs:
                 # Rename to include direction for distinguishable task_ids.
                 cfg.name = cfg.name.replace(
                     f"clamp={clamped}", f"dir={direction}/clamp={clamped}"
                 )
-                tasks.append(_ncp_task(cfg, "NCP2", phase, results_root))
+                tasks.append(_ncp_task(cfg, exp_name, phase, results_root))
     return tasks
 
 
+def _normalize_phase(phase: Union[str, int]) -> str:
+    """Convert integer phase aliases (1–4) to canonical string IDs."""
+    if isinstance(phase, int):
+        if phase not in _INT_ALIAS:
+            raise ValueError(f"Integer phase must be 1–4, got {phase}")
+        return _INT_ALIAS[phase]
+    phase = str(phase).lower()
+    if phase not in _VALID_PHASES:
+        raise ValueError(
+            f"Unknown phase {phase!r}. Valid values: {sorted(_VALID_PHASES)} "
+            f"or integers 1–4 (aliases for 1a–4a)."
+        )
+    return phase
+
+
 def build_phase_tasks(
-    phase: int,
+    phase: Union[str, int],
     gate_results: Dict[str, Any],
     results_root: Path,
     n_seeds_override: Optional[int] = None,
@@ -188,104 +236,184 @@ def build_phase_tasks(
     n_seeds_override: if set, caps the number of seeds per config (useful for
     smoke-testing the queue generation without generating thousands of tasks).
     """
+    phase = _normalize_phase(phase)
     tasks: List[Dict[str, Any]] = []
 
     def _seeds(default_count: int) -> List[int]:
         n = n_seeds_override if n_seeds_override is not None else default_count
         return list(range(n))
 
-    if phase == 1:
-        # NMH-1 extended (30 seeds, 4 a-values)
+    # ── Phase 1A (async) ────────────────────────────────────────────────────
+    if phase == "1a":
         for cfg in experiment_NMH1(seeds=_seeds(30)):
             tasks.append(_nc_task(cfg, "NMH1", phase, results_root))
 
-        # NMH-1b extended (15 seeds x 4 local_steps values)
         for cfg in experiment_NMH1b(seeds=_seeds(15)):
             tasks.append(_nc_task(cfg, "NMH1b", phase, results_root))
 
-        # NMH-3 extended (25 seeds x 8 a-values)
         for cfg in experiment_NMH3(seeds=_seeds(25)):
             tasks.append(_nc_task(cfg, "NMH3", phase, results_root))
 
-        # NCP-1 (graph-structure only, 240 configs)
         for cfg in experiment_NCP1_graph_configs():
             tasks.append(_ncp1_task(cfg, phase))
 
-        # NMH-7 pilot (5 seeds, depth=4)
         for cfg in experiment_NMH7(seeds=_seeds(5), depth=4, n_meas=2000):
             tasks.append(_nc_task(cfg, "NMH7_pilot", phase, results_root))
 
-    elif phase == 2:
+    # ── Phase 1S (synchronous) ───────────────────────────────────────────────
+    elif phase == "1s":
+        for cfg in experiment_NMH1(gossip_protocol="synchronous", seeds=_seeds(30)):
+            tasks.append(_nc_task(cfg, "NMH1S", phase, results_root))
+
+        # Extended ls sweep: [1,2,5] probe the synchronous threshold;
+        # [10,50,200] are direct comparison points with Phase 1A.
+        for cfg in experiment_NMH1b(
+            gossip_protocol="synchronous",
+            local_steps_list=[1, 2, 5, 10, 50, 200],
+            seeds=_seeds(15),
+        ):
+            tasks.append(_nc_task(cfg, "NMH1bS", phase, results_root))
+
+        for cfg in experiment_NMH3(gossip_protocol="synchronous", seeds=_seeds(25)):
+            tasks.append(_nc_task(cfg, "NMH3S", phase, results_root))
+
+        # NCP1 excluded — graph-only, no gossip protocol.
+
+    # ── Phase 2A (async) ────────────────────────────────────────────────────
+    elif phase == "2a":
         b_list = gate_results.get(
             "gate1_recommended_b_values",
             [0.020, 0.025, 0.030, 0.035, 0.040, 0.045, 0.050],
         )
 
-        # NMH-2 (30 seeds x len(b_list) b-values)
         for cfg in experiment_NMH2(b_list=b_list, seeds=_seeds(30)):
             tasks.append(_nc_task(cfg, "NMH2", phase, results_root))
 
-        # NMH-2b: same b sweep, different seeds for replication
         for cfg in experiment_NMH2(b_list=b_list, seeds=list(range(30, 30 + len(_seeds(30))))):
-            # Rename to NMH2b to produce distinct task_ids and pkl paths.
             cfg.name = cfg.name.replace("NMH2/", "NMH2b/")
             tasks.append(_nc_task(cfg, "NMH2b", phase, results_root))
 
-        # NMH-6 pilot (10 seeds)
         for cfg in experiment_NMH6(seeds=_seeds(10)):
             tasks.append(_nc_task(cfg, "NMH6", phase, results_root))
 
-        # NCP-2 pilot (10 seeds, outward + inward directions)
-        ncp2_seeds = _seeds(10)
-        tasks.extend(_build_ncp2_tasks_with_clamping(ncp2_seeds, phase, results_root))
+        tasks.extend(_build_ncp2_tasks_with_clamping(_seeds(10), phase, results_root))
 
-    elif phase == 3:
+    # ── Phase 2S (synchronous) ───────────────────────────────────────────────
+    elif phase == "2s":
+        b_list = gate_results.get(
+            "gate1_recommended_b_values",
+            [0.020, 0.025, 0.030, 0.035, 0.040, 0.045, 0.050],
+        )
+
+        for cfg in experiment_NMH2(
+            b_list=b_list, seeds=_seeds(30), gossip_protocol="synchronous"
+        ):
+            tasks.append(_nc_task(cfg, "NMH2S", phase, results_root))
+
+        for cfg in experiment_NMH2(
+            b_list=b_list,
+            seeds=list(range(30, 30 + len(_seeds(30)))),
+            gossip_protocol="synchronous",
+        ):
+            cfg.name = cfg.name.replace("NMH2S/", "NMH2bS/")
+            tasks.append(_nc_task(cfg, "NMH2bS", phase, results_root))
+
+        for cfg in experiment_NMH6(seeds=_seeds(10), gossip_protocol="synchronous"):
+            tasks.append(_nc_task(cfg, "NMH6S", phase, results_root))
+
+        tasks.extend(
+            _build_ncp2_tasks_with_clamping(
+                _seeds(10), phase, results_root, gossip_protocol="synchronous"
+            )
+        )
+
+    # ── Phase 3A (async) ────────────────────────────────────────────────────
+    elif phase == "3a":
         b_on_a_list = gate_results.get(
             "gate2_recommended_b_values_phase3",
             [0.02, 0.03, 0.04, 0.05, 0.06],
         )
 
-        # NMH-5 (50 seeds x 3 a-values x 5 b/a values)
         for cfg in experiment_NMH5(b_on_a_list=b_on_a_list, seeds=_seeds(50)):
             tasks.append(_nc_task(cfg, "NMH5", phase, results_root))
 
-        # NMH-7 full (15 seeds, depth=4, n_meas=4000)
         for cfg in experiment_NMH7(seeds=_seeds(15), depth=4, n_meas=4000):
             tasks.append(_nc_task(cfg, "NMH7", phase, results_root))
 
-        # NCP-3 (10 seeds)
         for cfg in experiment_NCP3(seeds=_seeds(10)):
             tasks.append(_ncp_task(cfg, "NCP3", phase, results_root))
 
-        # NMH-4 pilot (200 seeds, depth=5)
         for cfg in experiment_NMH4(seeds=_seeds(200), depth=5, n_meas=500):
             tasks.append(_nc_task(cfg, "NMH4_pilot", phase, results_root))
 
-    elif phase == 4:
+    # ── Phase 3S (synchronous) ───────────────────────────────────────────────
+    elif phase == "3s":
+        b_on_a_list = gate_results.get(
+            "gate2_recommended_b_values_phase3",
+            [0.02, 0.03, 0.04, 0.05, 0.06],
+        )
+
+        for cfg in experiment_NMH5(
+            b_on_a_list=b_on_a_list, seeds=_seeds(50), gossip_protocol="synchronous"
+        ):
+            tasks.append(_nc_task(cfg, "NMH5S", phase, results_root))
+
+        for cfg in experiment_NMH7(
+            seeds=_seeds(15), depth=4, n_meas=4000, gossip_protocol="synchronous"
+        ):
+            tasks.append(_nc_task(cfg, "NMH7S", phase, results_root))
+
+        for cfg in experiment_NCP3(seeds=_seeds(10), gossip_protocol="synchronous"):
+            tasks.append(_ncp_task(cfg, "NCP3S", phase, results_root))
+
+        for cfg in experiment_NMH4(
+            seeds=_seeds(200), depth=5, n_meas=500, gossip_protocol="synchronous"
+        ):
+            tasks.append(_nc_task(cfg, "NMH4S_pilot", phase, results_root))
+
+    # ── Phase 4A (async) ────────────────────────────────────────────────────
+    elif phase == "4a":
         phase4_mods = gate_results.get("gate3_phase4_modifications", "")
         depth = 7 if "depth=7" in phase4_mods else 6
 
-        # NMH-4 full (500 seeds x 3 a-values)
         for a in [1.0, 2.0, 4.0]:
             for cfg in experiment_NMH4(seeds=_seeds(500), depth=depth, a=a):
                 tasks.append(_nc_task(cfg, "NMH4", phase, results_root))
 
-        # NCP-4 (200 seeds)
         for cfg in experiment_NCP4(seeds=_seeds(200)):
             tasks.append(_ncp_task(cfg, "NCP4", phase, results_root))
 
-        # NCP-5 (10 seeds; 68 hrs each — checkpointing critical)
         for cfg in experiment_NCP5(seeds=_seeds(10)):
             tasks.append(_ncp_task(cfg, "NCP5", phase, results_root,
                                     checkpoint_every=CHECKPOINT_EVERY_DEFAULT))
 
-        # Comparative (100 seeds, NMH operating point)
         for cfg in experiment_NMH1(a_list=[0.5], seeds=_seeds(100)):
             cfg.name = cfg.name.replace("NMH1/", "Comparative/")
             tasks.append(_nc_task(cfg, "Comparative", phase, results_root))
 
-    else:
-        raise ValueError(f"Unknown phase: {phase}. Valid phases are 1–4.")
+    # ── Phase 4S (synchronous) ───────────────────────────────────────────────
+    elif phase == "4s":
+        phase4_mods = gate_results.get("gate3_phase4_modifications", "")
+        depth = 7 if "depth=7" in phase4_mods else 6
+
+        for a in [1.0, 2.0, 4.0]:
+            for cfg in experiment_NMH4(
+                seeds=_seeds(500), depth=depth, a=a, gossip_protocol="synchronous"
+            ):
+                tasks.append(_nc_task(cfg, "NMH4S", phase, results_root))
+
+        for cfg in experiment_NCP4(seeds=_seeds(200), gossip_protocol="synchronous"):
+            tasks.append(_ncp_task(cfg, "NCP4S", phase, results_root))
+
+        for cfg in experiment_NCP5(seeds=_seeds(10), gossip_protocol="synchronous"):
+            tasks.append(_ncp_task(cfg, "NCP5S", phase, results_root,
+                                    checkpoint_every=CHECKPOINT_EVERY_DEFAULT))
+
+        for cfg in experiment_NMH1(
+            a_list=[0.5], seeds=_seeds(100), gossip_protocol="synchronous"
+        ):
+            cfg.name = cfg.name.replace("NMH1S/", "ComparativeS/")
+            tasks.append(_nc_task(cfg, "ComparativeS", phase, results_root))
 
     return tasks
 
@@ -379,14 +507,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate sharded HPC task queue for timesep experiments."
     )
-    parser.add_argument("--phase", type=int, required=True, choices=[1, 2, 3, 4])
+    parser.add_argument(
+        "--phase", type=str, required=True,
+        help=(
+            "Phase ID: '1a'/'1s', '2a'/'2s', '3a'/'3s', '4a'/'4s', "
+            "or integers 1–4 (aliases for 1a–4a)."
+        ),
+    )
     parser.add_argument(
         "--queue-dir", type=Path, default=None,
-        help="Root directory for the queue. Defaults to queue/phase<N>/.",
+        help="Root directory for the queue. Defaults to queue/phase<ID>/.",
     )
     parser.add_argument(
         "--results-dir", type=Path, default=None,
-        help="Root directory for result pickles. Defaults to results/phase<N>/.",
+        help="Root directory for result pickles. Defaults to results/phase<ID>/.",
     )
     parser.add_argument("--n-shards", type=int, default=N_SHARDS)
     parser.add_argument("--overwrite", action="store_true")
@@ -399,8 +533,15 @@ def main() -> None:
     parser.add_argument("--gate3-results", type=str, default=None)
     args = parser.parse_args()
 
-    queue_dir = args.queue_dir or Path(f"queue/phase{args.phase}")
-    results_dir = args.results_dir or Path(f"results/phase{args.phase}")
+    # Normalise phase: "1" → "1a", "1s" → "1s", 1 → "1a"
+    try:
+        phase_int = int(args.phase)
+        phase_id = _normalize_phase(phase_int)
+    except ValueError:
+        phase_id = _normalize_phase(args.phase)
+
+    queue_dir = args.queue_dir or Path(f"queue/phase{phase_id}")
+    results_dir = args.results_dir or Path(f"results/phase{phase_id}")
 
     gate_paths = [
         p for p in [args.gate1_results, args.gate2_results, args.gate3_results]
@@ -409,7 +550,7 @@ def main() -> None:
     gate_results = load_gate_results(*gate_paths) if gate_paths else {}
 
     tasks = build_phase_tasks(
-        phase=args.phase,
+        phase=phase_id,
         gate_results=gate_results,
         results_root=results_dir,
         n_seeds_override=args.n_seeds,

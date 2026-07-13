@@ -1,0 +1,37 @@
+import sys, pickle, glob
+import numpy as np
+from collections import defaultdict
+
+sys.path.insert(0, r"C:\Users\tomwi\Documents\projects\deAI4CI\dssgd")
+from analysis.natural_cascade import NaturalCascadeRun
+
+PKL_DIR = r"C:\Users\tomwi\OneDrive\Documents\Research\Collective Intelligence\Outputs\results\phase1\phase1\pkl\NMH3"
+
+runs = [NaturalCascadeRun.load(p) for p in sorted(glob.glob(PKL_DIR + r"\*.pkl"))]
+print(f"Loaded {len(runs)} NMH3 runs")
+
+by_a = defaultdict(list)
+for r in runs:
+    by_a[r.a].append(r)
+
+n_leaves = runs[0].centroid_traj.shape[1]  # 32
+
+print(f"\n{'a':>6}  {'warmup_ok':>9}  {'any_cascade':>11}  {'full_cascade':>12}  {'mean_frac':>10}  {'n_seeds':>7}")
+print("-" * 65)
+for a in sorted(by_a):
+    rs = by_a[a]
+    n = len(rs)
+    warmup_ok = sum(r.warmup_ok for r in rs)
+    any_casc = sum(
+        1 for r in rs
+        if any(row.get("t_flip_absolute") is not None for row in r.flip_table)
+    )
+    full_casc = sum(
+        1 for r in rs
+        if sum(1 for row in r.flip_table if row.get("t_flip_absolute") is not None) == n_leaves - 1
+    )
+    mean_frac = np.mean([
+        sum(1 for row in r.flip_table if row.get("t_flip_absolute") is not None) / (n_leaves - 1)
+        for r in rs
+    ])
+    print(f"{a:>6.2f}  {warmup_ok:>4}/{n:<4}  {any_casc:>5}/{n:<5}  {full_casc:>6}/{n:<5}  {mean_frac:>10.3f}  {n:>7}")

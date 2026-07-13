@@ -133,6 +133,10 @@ class AsynchronousGossip(Protocol):
         self._rng = rng if rng is not None else np.random.default_rng()
         self._round_counter = 0
 
+    @property
+    def rng(self) -> np.random.Generator:
+        return self._rng
+
     def execute(self, comm_round: CommunicationRound, agents: List[Agent]):
         self._round_counter += 1
 
