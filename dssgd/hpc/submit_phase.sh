@@ -39,9 +39,14 @@ unset PYTHONPATH
 module load python3/3.10.5
 module load openssl/1.1.1p
 
+# Launch parallel workers on this node 
 for i in $(seq 0 $((WORKERS_PER_NODE - 1))); do
+    # Calculate global shard ID: (Node_Index * num_nodes) + Core_Index 
     SHARD_ID=$(( SLURM_ARRAY_TASK_ID * WORKERS_PER_NODE + i ))
+    # Only start a worker if the shard ID is within our total shards 
     if [ "$SHARD_ID" -lt "$N_SHARDS" ]; then
+        # srun --exclusive ensures each background process gets its own distinct CPU core 
+        # srun --ntasks=1 --nodes=1 --exclusive python3 -m hpc.worker \ 
         python3 -m hpc.worker \
             --queue-dir      "${QUEUE_DIR}" \
             --results-dir    "${RESULTS_DIR}" \

@@ -248,14 +248,20 @@ def run_natural_cascade_simulation(
         protocol = GossipAveraging()
 
     # Phase 1: warmup — drives all agents toward basin A.
-    # Plan is computed once per round (topology is static); gossip fires after
-    # each individual gradient step so waiting times are in gradient-step units.
+    # Async: gossip fires after each gradient step (Poisson-calibrated rate gives
+    # ~n_agents pairwise events total per round). Sync: one all-neighbour averaging
+    # event per round, after all local gradient steps (preserves timescale separation).
+    _async = config.gossip_protocol == "async_poisson"
     for round_idx in range(config.n_warmup):
         layer_graphs = ml_topo.step(round_idx)
         plan = compositor.compose(layer_graphs, agents[0].registry)
         for _ in range(config.local_steps):
             for agent in agents:
                 agent.local_step()
+            if _async:
+                for comm_round in plan.rounds:
+                    protocol.execute(comm_round, agents)
+        if not _async:
             for comm_round in plan.rounds:
                 protocol.execute(comm_round, agents)
 
@@ -288,6 +294,10 @@ def run_natural_cascade_simulation(
         for _ in range(config.local_steps):
             for agent in agents:
                 agent.local_step()
+            if _async:
+                for comm_round in plan.rounds:
+                    protocol.execute(comm_round, agents)
+        if not _async:
             for comm_round in plan.rounds:
                 protocol.execute(comm_round, agents)
         # Langevin noise: injected once per measurement round (not per gradient step)

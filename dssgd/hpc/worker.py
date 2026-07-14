@@ -206,7 +206,8 @@ class CheckpointableRunner:
         ml_topo = MultiLayerTopology({config.layer_name: topo})
         compositor = CoupledCompositor()
 
-        if config.gossip_protocol == "async_poisson":
+        _async_nmh = config.gossip_protocol == "async_poisson"
+        if _async_nmh:
             per_step_rate = (
                 config.gossip_rate if config.gossip_rate is not None else float(n_agents)
             ) / float(config.local_steps)
@@ -224,6 +225,10 @@ class CheckpointableRunner:
             for _ in range(config.local_steps):
                 for agent in agents:
                     agent.local_step()
+                if _async_nmh:
+                    for comm_round in plan.rounds:
+                        protocol.execute(comm_round, agents)
+            if not _async_nmh:
                 for comm_round in plan.rounds:
                     protocol.execute(comm_round, agents)
 
@@ -260,6 +265,10 @@ class CheckpointableRunner:
             for _ in range(config.local_steps):
                 for agent in agents:
                     agent.local_step()
+                if _async_nmh:
+                    for comm_round in plan.rounds:
+                        protocol.execute(comm_round, agents)
+            if not _async_nmh:
                 for comm_round in plan.rounds:
                     protocol.execute(comm_round, agents)
             if config.flip_noise_scale > 0:
@@ -423,7 +432,8 @@ class CheckpointableRunner:
         ml_topo = MultiLayerTopology({config.layer_name: ff_topo})
         compositor = CoupledCompositor()
 
-        if config.gossip_protocol == "async_poisson":
+        _async_ncp = config.gossip_protocol == "async_poisson"
+        if _async_ncp:
             per_step_rate = (
                 config.gossip_rate if config.gossip_rate is not None else float(config.n_nodes)
             ) / float(config.local_steps)
@@ -441,6 +451,10 @@ class CheckpointableRunner:
             for _ in range(config.local_steps):
                 for agent in agents:
                     agent.local_step()
+                if _async_ncp:
+                    for comm_round in plan.rounds:
+                        protocol.execute(comm_round, agents)
+            if not _async_ncp:
                 for comm_round in plan.rounds:
                     protocol.execute(comm_round, agents)
 
@@ -480,6 +494,10 @@ class CheckpointableRunner:
             for _ in range(config.local_steps):
                 for agent in agents:
                     agent.local_step()
+                if _async_ncp:
+                    for comm_round in plan.rounds:
+                        protocol.execute(comm_round, agents)
+            if not _async_ncp:
                 for comm_round in plan.rounds:
                     protocol.execute(comm_round, agents)
             if clamped_nodes:
