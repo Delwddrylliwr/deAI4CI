@@ -32,6 +32,7 @@ if str(_HERE) not in sys.path:
 from analysis.natural_cascade_experiments import (
     experiment_NMH1,
     experiment_NMH1b,
+    experiment_NMH1sb,
     experiment_NMH2,
     experiment_NMH3,
     experiment_NMH4,
@@ -56,7 +57,7 @@ from hpc.serialization import config_to_dict, task_id_from_config
 N_SHARDS = 100
 CHECKPOINT_EVERY_DEFAULT = 50
 
-_VALID_PHASES = {"1a", "1s", "2a", "2s", "3a", "3s", "4a", "4s"}
+_VALID_PHASES = {"1a", "1s", "1sb", "2a", "2s", "3a", "3s", "4a", "4s"}
 _INT_ALIAS = {1: "1a", 2: "2a", 3: "3a", 4: "4a"}
 
 # Estimated wall-clock hours per task (used for duration-balanced shard assignment).
@@ -81,7 +82,9 @@ EXPERIMENT_HOURS: Dict[str, float] = {
     "NCP4": 0.8,
     "NCP5": 68.0,
     "Comparative": 0.5,
-    # Phase 1S / 2S / 3S / 4S (synchronous gossip mirrors)
+    # Phase 1S / 1sB / 2S / 3S / 4S (synchronous gossip mirrors and transition sweep)
+    "NMH1sb": 0.5,
+    "NMH1sbS": 1.0,
     "NMH1S": 1.0,
     "NMH1bS": 1.0,
     "NMH3S": 1.0,
@@ -278,6 +281,11 @@ def build_phase_tasks(
             tasks.append(_nc_task(cfg, "NMH3S", phase, results_root))
 
         # NCP1 excluded — graph-only, no gossip protocol.
+
+    # ── Phase 1sB (sync transition zone: 2D a × local_steps sweep) ──────────
+    elif phase == "1sb":
+        for cfg in experiment_NMH1sb(gossip_protocol="synchronous", seeds=_seeds(75)):
+            tasks.append(_nc_task(cfg, "NMH1sbS", phase, results_root))
 
     # ── Phase 2A (async) ────────────────────────────────────────────────────
     elif phase == "2a":

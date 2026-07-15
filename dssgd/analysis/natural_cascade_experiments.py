@@ -132,6 +132,55 @@ def experiment_NMH1b(
 
 
 # ---------------------------------------------------------------------------
+# NMH-1sb: Transition-zone 2D sweep (a × local_steps, synchronous gossip)
+# ---------------------------------------------------------------------------
+
+
+def experiment_NMH1sb(
+    a_list: List[float] = (0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0),
+    local_steps_list: List[int] = (5, 10, 20, 30, 50),
+    seeds: List[int] = tuple(range(75)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    b: float = 0.042,
+    lr: float = 0.1,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    gossip_protocol: str = "synchronous",
+) -> List[NaturalCascadeConfig]:
+    """Transition-zone phase diagram: cascade size distributions across a × local_steps.
+
+    Targets the regime where synchronous gossip transitions from full cascade
+    (a≈0.5) to complete arrest (a≥1.0), characterising whether an intermediate
+    Griffiths power-law phase exists. Force-flip source decouples cascade
+    propagation from nucleation statistics.
+    """
+    prefix = "NMH1sbS" if gossip_protocol != "async_poisson" else "NMH1sb"
+    configs = []
+    for a in a_list:
+        for ls in local_steps_list:
+            for seed in seeds:
+                configs.append(NaturalCascadeConfig(
+                    name=f"{prefix}/a={a}/ls={ls}/seed={seed}",
+                    depth=depth,
+                    leaf_size=leaf_size,
+                    p=p,
+                    seed=seed,
+                    n_warmup=n_warmup,
+                    n_meas_rounds=n_meas,
+                    lr=lr,
+                    local_steps=ls,
+                    a=a,
+                    b=b,
+                    force_flip_source=True,
+                    flip_noise_scale=0.0,
+                    gossip_protocol=gossip_protocol,
+                ))
+    return configs
+
+
+# ---------------------------------------------------------------------------
 # NMH-2: Nucleation probability q_l as bias function
 # ---------------------------------------------------------------------------
 
