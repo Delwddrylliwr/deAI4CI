@@ -102,6 +102,63 @@ def cascade_size(
 
 
 # ---------------------------------------------------------------------------
+# Realised cross-edge count (Experiment E4)
+# ---------------------------------------------------------------------------
+
+
+def realized_cross_edge_count(
+    branching: int,
+    depth: int,
+    leaf_size: int,
+    p: float,
+    graph_seed: int,
+    source_leaf: int,
+    target_leaf: int,
+) -> int:
+    """Realised cross-edge count K at the boundary between source_leaf and
+    target_leaf's lowest common (level-`hierarchical_distance`) ancestor
+    (Theorem 4.1's quenched disorder, K_l ~ Poisson(p*m^2/4)).
+
+    Reconstructs the exact NestedModularTopology graph from its construction
+    parameters (post-hoc; NaturalCascadeRun does not store the graph itself)
+    and counts edges crossing the boundary between source_leaf's level-
+    (level-1) module and the rest of the shared level-`level` supermodule.
+    Requires the caller to know `graph_seed` -- the config used to run the
+    simulation, not the run's own `seed` field, since Experiment E4
+    deliberately decouples the two (NaturalCascadeConfig.graph_seed).
+    """
+    from dssgd.topology.static import NestedModularTopology
+
+    level = hierarchical_distance(source_leaf, target_leaf)
+    if level == 0:
+        return 0
+    topo = NestedModularTopology(
+        branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=graph_seed,
+    )
+    G, _ = topo.step(0)
+
+    leaves_per_module = branching ** (level - 1)
+    super_leaves_per_module = branching ** level
+    src_module = source_leaf // leaves_per_module
+    super_module = source_leaf // super_leaves_per_module
+
+    src_nodes = set(range(
+        src_module * leaves_per_module * leaf_size,
+        (src_module + 1) * leaves_per_module * leaf_size,
+    ))
+    super_nodes = set(range(
+        super_module * super_leaves_per_module * leaf_size,
+        (super_module + 1) * super_leaves_per_module * leaf_size,
+    ))
+    other_nodes = super_nodes - src_nodes
+
+    return sum(
+        1 for u, v in G.edges()
+        if (u in src_nodes and v in other_nodes) or (v in src_nodes and u in other_nodes)
+    )
+
+
+# ---------------------------------------------------------------------------
 # Nucleation probability (NMH-2)
 # ---------------------------------------------------------------------------
 

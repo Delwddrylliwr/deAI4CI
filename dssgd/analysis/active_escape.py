@@ -104,6 +104,52 @@ def make_bistable_loss_fn(
     return _loss
 
 
+def make_asymmetric_bistable_loss_fn(
+    theta_A: torch.Tensor,
+    theta_B: torch.Tensor,
+    a: float = 0.5,
+    b: float = 0.05,
+    r: float = 1.0,
+) -> Callable:
+    """Curvature-asymmetric generalisation of make_bistable_loss_fn (Lemma 10.1).
+
+    L_r(theta) = (a/2)*Q(theta)*(1 + eps*T(theta)) - b*Bias(theta)
+
+    where Q, Bias are exactly as in make_bistable_loss_fn, T(theta) =
+    proj(theta) - 1/2 is the signed projection onto the A->B axis centred at
+    the midpoint, and eps = theory.curvature_epsilon(r) = 2(r-1)/(r+1).
+
+    r=1 (eps=0) recovers make_bistable_loss_fn exactly. r>1 makes B the
+    sharper (higher-curvature) minimum and A the flatter one, at mu=0 (b=0)
+    exactly; for b != 0 this holds only approximately (paper's own scope:
+    "exact in the small-tilt, moderate-r regime"). See theory.chord_geometry
+    for the corresponding threshold/lambda computation.
+    """
+    from . import theory
+
+    A = theta_A.float()
+    B = theta_B.float()
+    delta_AB = B - A
+    delta_norm_sq = (delta_AB ** 2).sum()
+    delta_norm = delta_norm_sq.sqrt()
+    M = (A + B) / 2.0
+    direction = delta_AB / (delta_norm + 1e-12)
+    eps = theory.curvature_epsilon(r)
+
+    def _loss(model: nn.Module, batch) -> torch.Tensor:
+        theta = torch.cat([p.flatten() for p in model.parameters()])
+        diff_A = theta - A
+        diff_B = theta - B
+        Q = (diff_A ** 2).sum() * (diff_B ** 2).sum() / (delta_norm_sq + 1e-12)
+        proj = ((theta - A) * direction).sum() / (delta_norm + 1e-12)
+        T = proj - 0.5
+        well = (a / 2.0) * Q * (1.0 + eps * T)
+        bias = b * ((theta - M) * direction).sum()
+        return well - bias
+
+    return _loss
+
+
 def verify_bistable_loss(
     theta_A: torch.Tensor,
     theta_B: torch.Tensor,

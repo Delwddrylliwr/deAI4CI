@@ -18,6 +18,8 @@ gossip_protocol parameter (NCP-2 through NCP-5):
 
 from typing import List, Optional
 
+from dssgd.topology.forest_fire import ForestFireTopology
+
 from .ncp_runner import NCPSimConfig
 
 
@@ -108,6 +110,49 @@ def experiment_NCP2(
             clamped_shell=clamped_shell,
             gossip_protocol=gossip_protocol,
         ))
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# E8: Directional shell-crossing across EVERY adjacent boundary (Prop. 5.2)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E8(
+    seeds: List[int] = tuple(range(50)),
+    n_nodes: int = 1000,
+    p_f: float = 0.37,
+    r: float = 0.5,
+    a: float = 0.5,
+    b: float = 0.042,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 800,
+    gossip_protocol: str = "async_poisson",
+) -> List[NCPSimConfig]:
+    """Directional shell-crossing measurement generalising NCP-2's clamping
+    from just the innermost/outermost shells to EVERY shell in the graph.
+
+    Clamping shell k to B lets both adjacent boundaries' entrainment rates
+    be read off a single run post-hoc from flip_table (shell k-1's
+    entrainment = outward from k; shell k+1's entrainment = inward from k),
+    against the Lemma-3.1 prediction line computed from measured shell
+    sizes (theory.fixation_bias, with the shell size as the effective
+    clique size m -- q_fix(1; |S|, rho) -> 1/|S| as rho -> 1, eq. 5.1).
+    """
+    prefix = "E8S" if gossip_protocol != "async_poisson" else "E8"
+    configs = []
+    for seed in seeds:
+        topo = ForestFireTopology(n=n_nodes, p_f=p_f, seed=seed)
+        shell_ids = sorted(set(topo.shell_assignment().values()))
+        for k in shell_ids:
+            configs.append(NCPSimConfig(
+                name=f"{prefix}/p_f={p_f}/seed={seed}/clamp={k}",
+                n_nodes=n_nodes, p_f=p_f, r=r, seed=seed,
+                n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                a=a, b=b, clamped_shell=k, gossip_protocol=gossip_protocol,
+            ))
     return configs
 
 

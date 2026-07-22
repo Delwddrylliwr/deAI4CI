@@ -50,10 +50,11 @@ from analysis.ncp_runner import NCPRun, compute_shell_trajs
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AsynchronousGossip, GossipAveraging
+from dssgd.protocols.gossip import AsynchronousGossip, BoundedStalenessGossip, GossipAveraging
+from dssgd.topology.base import Topology
 from dssgd.topology.forest_fire import ForestFireTopology
 from dssgd.topology.multilayer import MultiLayerTopology
-from dssgd.topology.static import NestedModularTopology
+from dssgd.topology.static import NestedModularTopology, OverlappingModularTopology
 from hpc.serialization import dict_to_nc_config, dict_to_ncp_config
 
 # Imported from runners for use in the inlined loops
@@ -63,10 +64,12 @@ from analysis.active_escape import (
     basin_label,
     find_t_flip,
     force_flip_module,
+    make_asymmetric_bistable_loss_fn,
     make_bistable_loss_fn,
     verify_bistable_loss,
 )
 from analysis.catchup import compute_all_centroids, hierarchical_distance, leaf_assignments
+from analysis.provenance import GossipEvent, ProvenanceAsyncGossip, SeveredTopology
 from analysis import theory
 
 
@@ -93,6 +96,7 @@ class PartialRunState:
     torch_rng_state: bytes                  # pickle.dumps(torch.get_rng_state())
     gossip_rng_state: Optional[Any]         # protocol.rng.bit_generator.state (async only)
     clamp_rng_state: Optional[Any]          # NCP clamp rng state (async only)
+    events_so_far: Optional[List[GossipEvent]] = None  # provenance log (track_provenance only)
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +129,29 @@ class CheckpointableRunner:
     # ------------------------------------------------------------------
 
     def run(self):
-        ckpt = self._load_checkpoint()
         sim_type = self.task["sim_type"]
+        if sim_type == "clique_fixation":
+            # No checkpointing: each trial is one small clique, seconds to run.
+            from analysis.clique_fixation import CliqueFixationConfig, run_clique_fixation_trial
+
+            config = CliqueFixationConfig(**self.task["config"])
+            return run_clique_fixation_trial(config)
+
+        if sim_type == "generic_topology":
+            # Checkpointing lives inside generic_topology_runner itself (a
+            # different convention from the two branches below, which
+            # predate it -- see that module's docstring), so this branch
+            # does not go through _load_checkpoint()/PartialRunState at all.
+            from analysis.generic_topology_runner import run_generic_topology_simulation
+            from hpc.serialization import dict_to_generic_config
+
+            config = dict_to_generic_config(self.task["config"])
+            return run_generic_topology_simulation(
+                config, checkpoint_path=self.checkpoint_path,
+                checkpoint_every=self.checkpoint_every,
+            )
+
+        ckpt = self._load_checkpoint()
         if sim_type == "natural_cascade":
             return self._run_nmh(ckpt)
         elif sim_type == "ncp_simulation":
@@ -144,6 +169,9 @@ class CheckpointableRunner:
         # -- Setup (mirrors run_natural_cascade_simulation lines 155-249) --
         torch.manual_seed(config.seed)
         np.random.seed(config.seed)
+
+        if config.init_basin not in ("A", "B"):
+            raise ValueError(f"init_basin must be 'A' or 'B', got {config.init_basin!r}")
 
         theta_A_np = (
             config.theta_A if config.theta_A is not None
@@ -167,29 +195,52 @@ class CheckpointableRunner:
         n_agents = n_leaf_types * config.leaf_size
         assigns = leaf_assignments(n_agents, config.leaf_size)
 
-        topo = NestedModularTopology(
-            branching=config.branching,
-            depth=config.depth,
-            leaf_size=config.leaf_size,
-            p=config.p,
-            seed=config.seed,
-        )
+        graph_seed = config.graph_seed if config.graph_seed is not None else config.seed
+        if config.overlap_level is not None:
+            topo: Topology = OverlappingModularTopology(
+                branching=config.branching,
+                depth=config.depth,
+                leaf_size=config.leaf_size,
+                p=config.p,
+                overlap_level=config.overlap_level,
+                delta_in=config.delta_in,
+                n_overlap=config.n_overlap,
+                seed=graph_seed,
+            )
+        else:
+            topo = NestedModularTopology(
+                branching=config.branching,
+                depth=config.depth,
+                leaf_size=config.leaf_size,
+                p=config.p,
+                seed=graph_seed,
+            )
+        if config.sever_min_distance is not None:
+            topo = SeveredTopology(topo, assigns, config.sever_min_distance)
 
+        _make_loss = (
+            (lambda a_i, b_i: make_bistable_loss_fn(theta_A_t, theta_B_t, a_i, b_i))
+            if config.curvature_ratio == 1.0
+            else (lambda a_i, b_i: make_asymmetric_bistable_loss_fn(
+                theta_A_t, theta_B_t, a_i, b_i, r=config.curvature_ratio))
+        )
         if config.per_leaf_loss_params is None:
-            uniform_loss = make_bistable_loss_fn(theta_A_t, theta_B_t, config.a, config.b)
+            uniform_loss = _make_loss(config.a, config.b)
             loss_fn_for_leaf = {tau: uniform_loss for tau in range(n_leaf_types)}
         else:
             loss_fn_for_leaf = {
-                tau: make_bistable_loss_fn(theta_A_t, theta_B_t, a_i, b_i)
+                tau: _make_loss(a_i, b_i)
                 for tau, (a_i, b_i) in enumerate(config.per_leaf_loss_params)
             }
 
         loaders = [_dummy_loader_bistable() for _ in range(n_agents)]
 
+        init_target_t = theta_A_t if config.init_basin == "A" else theta_B_t
+
         def _make_agent(agent_id: int) -> Agent:
             torch.manual_seed(config.seed * 10000 + agent_id)
             init_noise = torch.randn(config.d_param) * 0.05
-            init_val = theta_A_t + init_noise
+            init_val = init_target_t + init_noise
             model = BistableParameterModule(d_param=config.d_param, init_value=init_val)
             leaf_idx = int(assigns[agent_id])
             entry = ModelEntry(
@@ -206,20 +257,48 @@ class CheckpointableRunner:
         ml_topo = MultiLayerTopology({config.layer_name: topo})
         compositor = CoupledCompositor()
 
-        _async_nmh = config.gossip_protocol == "async_poisson"
-        if _async_nmh:
+        if config.track_provenance and config.gossip_protocol != "async_poisson":
+            raise ValueError(
+                "track_provenance requires gossip_protocol='async_poisson' "
+                f"(event-level attribution is undefined for {config.gossip_protocol!r})"
+            )
+
+        _async_nmh = config.gossip_protocol in ("async_poisson", "bounded_staleness")
+        if config.gossip_protocol == "async_poisson":
             per_step_rate = (
                 config.gossip_rate if config.gossip_rate is not None else float(n_agents)
             ) / float(config.local_steps)
-            protocol = AsynchronousGossip(
+            if config.track_provenance:
+                protocol = ProvenanceAsyncGossip(
+                    rate=per_step_rate, mode="poisson", alpha=config.gossip_alpha,
+                    rng=np.random.default_rng(config.seed + 42), leaf_assigns=assigns,
+                )
+            else:
+                protocol = AsynchronousGossip(
+                    rate=per_step_rate, mode="poisson", alpha=config.gossip_alpha,
+                    rng=np.random.default_rng(config.seed + 42),
+                )
+        elif config.gossip_protocol == "bounded_staleness":
+            per_step_rate = (
+                config.gossip_rate if config.gossip_rate is not None else float(n_agents)
+            ) / float(config.local_steps)
+            protocol = BoundedStalenessGossip(
                 rate=per_step_rate, mode="poisson", alpha=config.gossip_alpha,
-                rng=np.random.default_rng(config.seed + 42),
+                rng=np.random.default_rng(config.seed + 42), staleness_bound=config.staleness_bound,
             )
-        else:
+        elif config.gossip_protocol == "synchronous":
             protocol = GossipAveraging()
+        else:
+            raise ValueError(
+                f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
+                f"'async_poisson', 'synchronous', or 'bounded_staleness'."
+            )
+        _has_round_idx = hasattr(protocol, "round_idx")
 
         # -- Warmup (always re-run; deterministic from seed) --
         for round_idx in range(config.n_warmup):
+            if _has_round_idx:
+                protocol.round_idx = round_idx
             layer_graphs = ml_topo.step(round_idx)
             plan = compositor.compose(layer_graphs, agents[0].registry)
             for _ in range(config.local_steps):
@@ -234,7 +313,8 @@ class CheckpointableRunner:
 
         post_warmup_centroids = compute_all_centroids(agents, assigns, n_leaf_types)
         warmup_ok = all(
-            basin_label(post_warmup_centroids[tau], theta_A_np, theta_B_np, config.epsilon) == 'A'
+            basin_label(post_warmup_centroids[tau], theta_A_np, theta_B_np, config.epsilon)
+            == config.init_basin
             for tau in range(n_leaf_types)
         )
 
@@ -249,17 +329,22 @@ class CheckpointableRunner:
             source_leaf = ckpt.source_leaf
             warmup_ok = ckpt.warmup_ok
             resume_round = ckpt.round_completed
+            if config.track_provenance and ckpt.events_so_far is not None:
+                protocol.events = list(ckpt.events_so_far)
         else:
             source_leaf = None
             if config.force_flip_source:
                 source_leaf = int(np.random.randint(n_leaf_types))
-                force_flip_module(agents, assigns, source_leaf, theta_B_t, noise_scale=0.0)
+                flip_target_t = theta_B_t if config.init_basin == "A" else theta_A_t
+                force_flip_module(agents, assigns, source_leaf, flip_target_t, noise_scale=0.0)
             baseline = compute_all_centroids(agents, assigns, n_leaf_types)
             centroid_traj_list = [baseline.copy()]
             resume_round = 0
 
         # -- Measurement loop --
         for round_idx in range(resume_round, config.n_meas_rounds):
+            if _has_round_idx:
+                protocol.round_idx = config.n_warmup + round_idx
             layer_graphs = ml_topo.step(config.n_warmup + round_idx)
             plan = compositor.compose(layer_graphs, agents[0].registry)
             for _ in range(config.local_steps):
@@ -299,6 +384,7 @@ class CheckpointableRunner:
                     torch_rng_state=pickle.dumps(torch.get_rng_state()),
                     gossip_rng_state=gossip_rng_state,
                     clamp_rng_state=None,
+                    events_so_far=list(protocol.events) if config.track_provenance else None,
                 ))
 
         centroid_traj = np.stack(centroid_traj_list)
@@ -366,6 +452,7 @@ class CheckpointableRunner:
             flip_table=flip_table,
             regime=regime,
             ell_c=ell_c,
+            events=protocol.events if config.track_provenance else None,
         )
 
     # ------------------------------------------------------------------
@@ -716,6 +803,32 @@ def extract_result_summary(result, task: Dict[str, Any]) -> Dict[str, Any]:
             "graph_stats": result.graph_stats,
         }
 
+    if sim_type == "clique_fixation":
+        return {
+            "m": result.m, "j_seeds": result.j_seeds, "a": result.a, "b": result.b,
+            "r": result.r, "fixed_at_B": result.fixed_at_B,
+        }
+
+    if sim_type == "generic_topology":
+        if result.mode == "collapse":
+            return {
+                "mode": "collapse",
+                "topology": result.topology,
+                "post_label": result.post_label,
+                "barrier_loss": result.barrier_loss,
+                "aligned": result.aligned,
+            }
+        flipped = sum(1 for row in result.flip_table if row.get("t_flip_absolute") is not None)
+        return {
+            "mode": "cascade",
+            "topology": result.topology,
+            "warmup_ok": result.warmup_ok,
+            "nucleation_node": result.nucleation_node,
+            "t_nucleation": result.t_nucleation,
+            "n_flipped": flipped,
+            "graph_stats": result.graph_stats,
+        }
+
     return {}
 
 
@@ -807,6 +920,12 @@ def run_task(
     if pkl_path and Path(pkl_path).exists():
         if task["sim_type"] == "natural_cascade":
             result = NaturalCascadeRun.load(pkl_path)
+        elif task["sim_type"] == "generic_topology":
+            from analysis.generic_topology_runner import GenericTopologyRun
+            result = GenericTopologyRun.load(pkl_path)
+        elif task["sim_type"] == "clique_fixation":
+            from analysis.clique_fixation import CliqueFixationRun
+            result = CliqueFixationRun.load(pkl_path)
         else:
             result = NCPRun.load(pkl_path)
         return extract_result_summary(result, task)

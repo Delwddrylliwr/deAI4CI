@@ -22,9 +22,10 @@ import torch
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AsynchronousGossip, GossipAveraging
+from dssgd.protocols.gossip import AsynchronousGossip, BoundedStalenessGossip, GossipAveraging
+from dssgd.topology.base import Topology
 from dssgd.topology.multilayer import MultiLayerTopology
-from dssgd.topology.static import NestedModularTopology
+from dssgd.topology.static import NestedModularTopology, OverlappingModularTopology
 
 from . import theory
 from .active_escape import (
@@ -33,6 +34,7 @@ from .active_escape import (
     basin_label,
     find_t_flip,
     force_flip_module,
+    make_asymmetric_bistable_loss_fn,
     make_bistable_loss_fn,
     verify_bistable_loss,
 )
@@ -42,6 +44,7 @@ from .catchup import (
     hierarchical_distance,
     leaf_assignments,
 )
+from .provenance import GossipEvent, ProvenanceAsyncGossip, SeveredTopology
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +62,13 @@ class NaturalCascadeConfig:
     leaf_size: int = 4
     p: float = 2.0
     seed: int = 0
+    graph_seed: Optional[int] = None  # None: reuse `seed` (default/legacy behaviour).
+    # Decouples the topology draw from the dynamics RNG seed so a quenched
+    # graph realisation can be replayed against many dynamics seeds, and vice
+    # versa (Experiment E4's quenched-vs-annealed cascade-size comparison).
+    init_basin: str = "A"  # "A" or "B": which basin warmup drives agents toward
+    # (Experiment E3's hysteresis test: does the reachable phase depend on
+    # whether agents start near A or near B?).
     n_warmup: int = 400
     n_meas_rounds: int = 1000
     lr: float = 0.1
@@ -79,6 +89,25 @@ class NaturalCascadeConfig:
     # NMH-6 heterogeneous loss: one (a_i, b_i) per leaf; None = uniform
     per_leaf_loss_params: Optional[List[Tuple[float, float]]] = None
     t_horizon: int = 800           # round index used by cascade_size observable
+
+    # Experiment E1: kick-vs-escape provenance tracking + gossip-severed control.
+    track_provenance: bool = False  # log cross-boundary events (async_poisson only)
+    sever_min_distance: Optional[int] = None  # prune edges >= this hierarchical
+    # distance apart before simulating (Prop. 3.4's severed-system null); None = no severing.
+
+    # Experiments E7 / E12(b): curvature ratio r of the asymmetric well (Lemma 10.1).
+    # r=1.0 (default) is the equal-curvature family of Lemma 2.1 (unchanged behaviour).
+    curvature_ratio: float = 1.0
+
+    # Experiment E11: bounded-staleness / per-boundary seed-locking scheduling.
+    # Only consulted when gossip_protocol == "bounded_staleness".
+    staleness_bound: int = 0
+
+    # Experiment E13: DAG-nested / overlapping module hierarchy (Section 11).
+    # overlap_level=None (default) builds the plain tree (NestedModularTopology).
+    overlap_level: Optional[int] = None
+    delta_in: int = 1        # boundary in-degree Delta_in at overlap_level
+    n_overlap: int = 0       # number of level-overlap_level modules granted extra parents
 
 
 @dataclass
@@ -120,6 +149,7 @@ class NaturalCascadeRun:
     flip_table: List[dict]
     regime: str
     ell_c: int
+    events: Optional[List[GossipEvent]] = None  # populated iff track_provenance=True
 
     def save(self, path: Union[str, Path]) -> None:
         p_obj = Path(path)
@@ -154,6 +184,9 @@ def run_natural_cascade_simulation(
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
 
+    if config.init_basin not in ("A", "B"):
+        raise ValueError(f"init_basin must be 'A' or 'B', got {config.init_basin!r}")
+
     # Resolve theta_A / theta_B defaults
     theta_A_np = (
         config.theta_A if config.theta_A is not None
@@ -186,17 +219,38 @@ def run_natural_cascade_simulation(
     n_agents = n_leaf_types * config.leaf_size
     assigns = leaf_assignments(n_agents, config.leaf_size)
 
-    topo = NestedModularTopology(
-        branching=config.branching,
-        depth=config.depth,
-        leaf_size=config.leaf_size,
-        p=config.p,
-        seed=config.seed,
-    )
+    graph_seed = config.graph_seed if config.graph_seed is not None else config.seed
+    if config.overlap_level is not None:
+        topo: Topology = OverlappingModularTopology(
+            branching=config.branching,
+            depth=config.depth,
+            leaf_size=config.leaf_size,
+            p=config.p,
+            overlap_level=config.overlap_level,
+            delta_in=config.delta_in,
+            n_overlap=config.n_overlap,
+            seed=graph_seed,
+        )
+    else:
+        topo = NestedModularTopology(
+            branching=config.branching,
+            depth=config.depth,
+            leaf_size=config.leaf_size,
+            p=config.p,
+            seed=graph_seed,
+        )
+    if config.sever_min_distance is not None:
+        topo = SeveredTopology(topo, assigns, config.sever_min_distance)
 
     # Build per-leaf loss functions
+    _make_loss = (
+        (lambda a_i, b_i: make_bistable_loss_fn(theta_A_t, theta_B_t, a_i, b_i))
+        if config.curvature_ratio == 1.0
+        else (lambda a_i, b_i: make_asymmetric_bistable_loss_fn(
+            theta_A_t, theta_B_t, a_i, b_i, r=config.curvature_ratio))
+    )
     if config.per_leaf_loss_params is None:
-        uniform_loss = make_bistable_loss_fn(theta_A_t, theta_B_t, config.a, config.b)
+        uniform_loss = _make_loss(config.a, config.b)
         loss_fn_for_leaf: Dict[int, Callable] = {
             tau: uniform_loss for tau in range(n_leaf_types)
         }
@@ -207,16 +261,18 @@ def run_natural_cascade_simulation(
                 f"but there are {n_leaf_types} leaf types."
             )
         loss_fn_for_leaf = {
-            tau: make_bistable_loss_fn(theta_A_t, theta_B_t, a_i, b_i)
+            tau: _make_loss(a_i, b_i)
             for tau, (a_i, b_i) in enumerate(config.per_leaf_loss_params)
         }
 
     loaders = [_dummy_loader_bistable() for _ in range(n_agents)]
 
+    init_target_t = theta_A_t if config.init_basin == "A" else theta_B_t
+
     def _make_agent(agent_id: int) -> Agent:
         torch.manual_seed(config.seed * 10000 + agent_id)
         init_noise = torch.randn(config.d_param) * 0.05
-        init_val = theta_A_t + init_noise
+        init_val = init_target_t + init_noise
         model = BistableParameterModule(d_param=config.d_param, init_value=init_val)
         leaf_idx = int(assigns[agent_id])
         entry = ModelEntry(
@@ -229,6 +285,12 @@ def run_natural_cascade_simulation(
         )
         return Agent(agent_id, ModelRegistry({"model": entry}), loaders[agent_id])
 
+    if config.track_provenance and config.gossip_protocol != "async_poisson":
+        raise ValueError(
+            "track_provenance requires gossip_protocol='async_poisson' "
+            f"(event-level attribution is undefined for {config.gossip_protocol!r})"
+        )
+
     agents = [_make_agent(i) for i in range(n_agents)]
     ml_topo = MultiLayerTopology({config.layer_name: topo})
     compositor = CoupledCompositor()
@@ -238,21 +300,49 @@ def run_natural_cascade_simulation(
         per_step_rate = (
             config.gossip_rate if config.gossip_rate is not None else float(n_agents)
         ) / float(config.local_steps)
-        protocol = AsynchronousGossip(
+        if config.track_provenance:
+            protocol = ProvenanceAsyncGossip(
+                rate=per_step_rate,
+                mode="poisson",
+                alpha=config.gossip_alpha,
+                rng=np.random.default_rng(config.seed + 42),
+                leaf_assigns=assigns,
+            )
+        else:
+            protocol = AsynchronousGossip(
+                rate=per_step_rate,
+                mode="poisson",
+                alpha=config.gossip_alpha,
+                rng=np.random.default_rng(config.seed + 42),
+            )
+    elif config.gossip_protocol == "bounded_staleness":
+        per_step_rate = (
+            config.gossip_rate if config.gossip_rate is not None else float(n_agents)
+        ) / float(config.local_steps)
+        protocol = BoundedStalenessGossip(
             rate=per_step_rate,
             mode="poisson",
             alpha=config.gossip_alpha,
             rng=np.random.default_rng(config.seed + 42),
+            staleness_bound=config.staleness_bound,
         )
-    else:
+    elif config.gossip_protocol == "synchronous":
         protocol = GossipAveraging()
+    else:
+        raise ValueError(
+            f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
+            f"'async_poisson', 'synchronous', or 'bounded_staleness'."
+        )
+    _has_round_idx = hasattr(protocol, "round_idx")
 
     # Phase 1: warmup — drives all agents toward basin A.
     # Async: gossip fires after each gradient step (Poisson-calibrated rate gives
     # ~n_agents pairwise events total per round). Sync: one all-neighbour averaging
     # event per round, after all local gradient steps (preserves timescale separation).
-    _async = config.gossip_protocol == "async_poisson"
+    _async = config.gossip_protocol in ("async_poisson", "bounded_staleness")
     for round_idx in range(config.n_warmup):
+        if _has_round_idx:
+            protocol.round_idx = round_idx
         layer_graphs = ml_topo.step(round_idx)
         plan = compositor.compose(layer_graphs, agents[0].registry)
         for _ in range(config.local_steps):
@@ -265,10 +355,11 @@ def run_natural_cascade_simulation(
             for comm_round in plan.rounds:
                 protocol.execute(comm_round, agents)
 
-    # Post-warmup check: all modules should be in basin A
+    # Post-warmup check: all modules should be in the init_basin target
     post_warmup_centroids = compute_all_centroids(agents, assigns, n_leaf_types)
     warmup_ok = all(
-        basin_label(post_warmup_centroids[tau], theta_A_np, theta_B_np, config.epsilon) == 'A'
+        basin_label(post_warmup_centroids[tau], theta_A_np, theta_B_np, config.epsilon)
+        == config.init_basin
         for tau in range(n_leaf_types)
     )
     # For b=0 (NMH-7), agents start near A but both basins are symmetric;
@@ -283,12 +374,15 @@ def run_natural_cascade_simulation(
     # other flip times are relative to this forced starting point.
     if config.force_flip_source:
         source_leaf = int(np.random.randint(n_leaf_types))
-        force_flip_module(agents, assigns, source_leaf, theta_B_t, noise_scale=0.0)
+        flip_target_t = theta_B_t if config.init_basin == "A" else theta_A_t
+        force_flip_module(agents, assigns, source_leaf, flip_target_t, noise_scale=0.0)
 
     baseline = compute_all_centroids(agents, assigns, n_leaf_types)
     centroid_traj_list.append(baseline.copy())
 
     for round_idx in range(config.n_meas_rounds):
+        if _has_round_idx:
+            protocol.round_idx = config.n_warmup + round_idx
         layer_graphs = ml_topo.step(config.n_warmup + round_idx)
         plan = compositor.compose(layer_graphs, agents[0].registry)
         for _ in range(config.local_steps):
@@ -388,4 +482,5 @@ def run_natural_cascade_simulation(
         flip_table=flip_table,
         regime=regime,
         ell_c=ell_c,
+        events=protocol.events if config.track_provenance else None,
     )

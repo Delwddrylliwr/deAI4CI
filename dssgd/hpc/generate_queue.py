@@ -22,7 +22,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # Allow running as `python -m hpc.generate_queue` from dssgd/ directory.
 _HERE = Path(__file__).parent.parent
@@ -30,6 +30,15 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from analysis.natural_cascade_experiments import (
+    experiment_E1,
+    experiment_E2,
+    experiment_E3,
+    experiment_E4,
+    experiment_E5,
+    experiment_E6,
+    experiment_E11,
+    experiment_E12a,
+    experiment_E13,
     experiment_NMH1,
     experiment_NMH1b,
     experiment_NMH1sb,
@@ -40,7 +49,10 @@ from analysis.natural_cascade_experiments import (
     experiment_NMH6,
     experiment_NMH7,
 )
+from analysis.clique_fixation import experiment_E7, experiment_E12b
+from analysis.generic_topology_experiments import experiment_E9, experiment_E10
 from analysis.ncp_experiments import (
+    experiment_E8,
     experiment_NCP1_graph_configs,
     experiment_NCP2,
     experiment_NCP3,
@@ -57,8 +69,11 @@ from hpc.serialization import config_to_dict, task_id_from_config
 N_SHARDS = 100
 CHECKPOINT_EVERY_DEFAULT = 50
 
-_VALID_PHASES = {"1a", "1s", "1sb", "2a", "2s", "3a", "3s", "4a", "4s"}
-_INT_ALIAS = {1: "1a", 2: "2a", 3: "3a", 4: "4a"}
+_VALID_PHASES = {
+    "1a", "1s", "1sb", "2a", "2s", "3a", "3s", "4a", "4s",
+    "5a", "5s", "6a", "6s", "7a", "7s",
+}
+_INT_ALIAS = {1: "1a", 2: "2a", 3: "3a", 4: "4a", 5: "5a", 6: "6a", 7: "7a"}
 
 # Estimated wall-clock hours per task (used for duration-balanced shard assignment).
 # S-variant estimates are approximately 2× their A counterparts because
@@ -100,6 +115,50 @@ EXPERIMENT_HOURS: Dict[str, float] = {
     "NCP4S": 1.6,
     "NCP5S": 136.0,
     "ComparativeS": 1.0,
+    # Phase 5A/5S, 6A/6S, 7A/7S (Annex B: E1-E13). Estimates below are
+    # calibrated from a two-part local benchmark (see the project plan):
+    # (1) a structural unit-count ratio to NMH1 (agents x total_rounds x
+    #     local_steps, per task, at each experiment's OWN full-default
+    #     parameters), scaled by NMH1's trusted 0.5h; (2) cross-validated by
+    #     measuring LOCAL wall-clock time for E4/E8/E10/E13 (their full
+    #     topology/agent-count, rounds reduced by the SAME fraction as a
+    #     matched NMH1 reference run) and confirming the ratio-of-measured-
+    #     times lands within ~15-20% of the structural prediction -- this
+    #     cross-validation is what justifies using the structural ratio
+    #     (rather than raw local seconds, which do not transfer to HPC
+    #     hardware) for the experiments not separately measured.
+    # E7/E9/E12b were measured directly at full scale (cheap enough to run
+    # outright) and converted via the SAME local-to-HPC correction factor
+    # implied by the NMH1 reference's reduced-vs-full-scale ratio.
+    # NOTE: this exercise found E8's structural/measured cost (~3.0h) is
+    # ~3.75x the EXISTING NCP2 entry (0.8h) despite identical per-task
+    # config shape (same n_nodes/local_steps/rounds) -- flagging this as a
+    # likely-stale NCP2 estimate for whoever maintains that entry, rather
+    # than silently matching it.
+    "E1": 0.5,       # NMH1-shaped (~2.5% provenance overhead, Phase 5 benchmark)
+    "E2": 0.5,       # NMH1-shaped (fixed-lambda sweep)
+    "E2S": 1.0,
+    "E3": 0.5,       # NMH1-shaped per TASK (the init=A/B split is separate tasks, not 2x cost each)
+    "E3S": 1.0,
+    "E4": 1.8,       # depth=7 (512 agents): structural ratio 4.0x NMH1, measured ratio 3.47x
+    "E4S": 3.6,
+    "E5": 0.5,       # NMH1-shaped sigma-sweep with provenance tracking
+    "E6": 0.5,       # NMH1-shaped (per-leaf heterogeneity, no hierarchy change)
+    "E6S": 1.0,
+    "E7": 0.01,      # single clique (worst case m=16), no hierarchy — measured at full scale
+    "E7S": 0.02,
+    "E8": 3.0,       # measured: n_nodes=1000 is ~6-8x NMH1's 128 agents per round
+    "E8S": 6.0,
+    "E9": 0.001,     # single-shot aggregation + relax, no gossip loop, no per-round Topology overhead
+    "E10": 0.5,      # measured ratio 0.86x NMH1 (dumbbell at matched N) — structural estimate confirmed
+    "E10S": 1.0,
+    "E11": 0.5,      # NMH1-shaped scheduling sweep
+    "E12a": 0.5,     # == E6
+    "E12aS": 1.0,
+    "E12b": 0.01,    # == E7
+    "E12bS": 0.02,
+    "E13": 4.0,      # worst case m=32 (1024 agents): structural ratio 8.0x, measured ratio 7.15x
+    "E13S": 8.0,
 }
 
 # ---------------------------------------------------------------------------
@@ -144,6 +203,52 @@ def _ncp_task(
         "sim_type": "ncp_simulation",
         "config": config_to_dict(config),
         "checkpoint_every": checkpoint_every,
+        "estimated_hours": EXPERIMENT_HOURS.get(experiment, 1.0),
+        "result_pkl_path": pkl_path,
+    }
+
+
+def _clique_task(
+    config,
+    experiment: str,
+    phase: Union[str, int],
+    results_root: Path,
+) -> Dict[str, Any]:
+    """CliqueFixationConfig tasks (E7, E12b) — no checkpointing (each trial
+    is a single small clique, seconds to run; see EXPERIMENT_HOURS)."""
+    task_id = task_id_from_config(config)
+    pkl_path = str(results_root / "pkl" / experiment / f"{task_id}.pkl")
+    return {
+        "task_id": task_id,
+        "experiment": experiment,
+        "phase": phase,
+        "sim_type": "clique_fixation",
+        "config": config_to_dict(config),
+        "checkpoint_every": 0,
+        "estimated_hours": EXPERIMENT_HOURS.get(experiment, 1.0),
+        "result_pkl_path": pkl_path,
+    }
+
+
+def _generic_task(
+    config,
+    experiment: str,
+    phase: Union[str, int],
+    results_root: Path,
+    checkpoint_every: int = CHECKPOINT_EVERY_DEFAULT,
+) -> Dict[str, Any]:
+    """GenericTopologyConfig tasks (E9 collapse, E10 cascade). Checkpointing
+    for cascade-mode runs is handled inside generic_topology_runner itself
+    (see that module's docstring) via the same checkpoint_every convention."""
+    task_id = task_id_from_config(config)
+    pkl_path = str(results_root / "pkl" / experiment / f"{task_id}.pkl")
+    return {
+        "task_id": task_id,
+        "experiment": experiment,
+        "phase": phase,
+        "sim_type": "generic_topology",
+        "config": config_to_dict(config),
+        "checkpoint_every": checkpoint_every if config.mode == "cascade" else 0,
         "estimated_hours": EXPERIMENT_HOURS.get(experiment, 1.0),
         "result_pkl_path": pkl_path,
     }
@@ -423,7 +528,140 @@ def build_phase_tasks(
             cfg.name = cfg.name.replace("NMH1S/", "ComparativeS/")
             tasks.append(_nc_task(cfg, "ComparativeS", phase, results_root))
 
+    # ── Phase 5A (Track A: independent new infra, no gate dependency) ───────
+    # E1, E6, E7, E9, E10, E13 need only their own new subsystem (built this
+    # phase), not any earlier phase's fitted results -- schedulable in
+    # parallel with, or before, phases 1-4 completing.
+    elif phase == "5a":
+        for cfg in experiment_E1(seeds=_seeds(30)):
+            tasks.append(_nc_task(cfg, "E1", phase, results_root))
+
+        for cfg in experiment_E6(seeds=_seeds(50)):
+            tasks.append(_nc_task(cfg, "E6", phase, results_root))
+
+        for cfg in experiment_E7(seeds=_seeds(50)):
+            tasks.append(_clique_task(cfg, "E7", phase, results_root))
+
+        for cfg in experiment_E9(seeds=_seeds(50)):
+            tasks.append(_generic_task(cfg, "E9", phase, results_root))
+
+        for cfg in experiment_E10(seeds=_seeds(50)):
+            tasks.append(_generic_task(cfg, "E10", phase, results_root))
+
+        for cfg in experiment_E13(seeds=_seeds(30)):
+            tasks.append(_nc_task(cfg, "E13", phase, results_root))
+
+    # ── Phase 5S (synchronous mirrors, where meaningful) ────────────────────
+    elif phase == "5s":
+        for cfg in experiment_E6(seeds=_seeds(50), gossip_protocol="synchronous"):
+            tasks.append(_nc_task(cfg, "E6S", phase, results_root))
+
+        for cfg in experiment_E7(seeds=_seeds(50), gossip_protocol="synchronous"):
+            tasks.append(_clique_task(cfg, "E7S", phase, results_root))
+
+        for cfg in experiment_E10(seeds=_seeds(50), gossip_protocol="synchronous"):
+            tasks.append(_generic_task(cfg, "E10S", phase, results_root))
+        # E9 is single-shot (no gossip protocol) -- no sync variant.
+
+        for cfg in experiment_E13(seeds=_seeds(30), gossip_protocol="synchronous"):
+            tasks.append(_nc_task(cfg, "E13S", phase, results_root))
+
+    # ── Phase 6A (Track C: second-order on Phase 5's OWN new infra) ────────
+    # E5 needs E1's provenance mechanism; E11 needs both provenance and
+    # bounded-staleness; E12(a) needs E6's generality machinery; E12(b)
+    # needs E7's clique-fixation machinery. None of these are gated on
+    # phase 1-4 RESULTS, only on phase 5's CODE existing (which it does).
+    elif phase == "6a":
+        for cfg in experiment_E5(seeds=_seeds(30)):
+            tasks.append(_nc_task(cfg, "E5", phase, results_root))
+
+        for cfg in experiment_E11(seeds=_seeds(30)):
+            tasks.append(_nc_task(cfg, "E11", phase, results_root))
+
+        for cfg in experiment_E12a(seeds=_seeds(50)):
+            tasks.append(_nc_task(cfg, "E12a", phase, results_root))
+
+        for cfg in experiment_E12b(seeds=_seeds(50)):
+            tasks.append(_clique_task(cfg, "E12b", phase, results_root))
+
+    elif phase == "6s":
+        for cfg in experiment_E12a(seeds=_seeds(50), gossip_protocol="synchronous"):
+            tasks.append(_nc_task(cfg, "E12aS", phase, results_root))
+
+        for cfg in experiment_E12b(seeds=_seeds(50), gossip_protocol="synchronous"):
+            tasks.append(_clique_task(cfg, "E12bS", phase, results_root))
+        # E5 requires async_poisson (provenance); E11 already sweeps sync
+        # internally via its own `schedulings` list -- no separate 6S variant.
+
+    # ── Phase 7A (Track B: gated continuations of phases 1-4) ──────────────
+    # E2 needs NMH1/NMH3's observed a-boundary; E3 needs NMH3 + E2; E4 needs
+    # NMH4's Griffitts operating point; E8 needs NCP2's asymmetry machinery
+    # to already exist (it does). Gate keys below fall back to the same
+    # defaults NMH1/NMH3/NMH4 already use when no gate file is supplied --
+    # the review scripts that would COMPUTE gate3_e2_a_anchor etc. from
+    # phase 1-4's actual results are not yet written (see plan note).
+    elif phase == "7a":
+        e2_a_list, e3_a_list, e4_a = _gate1_derived_a_values(gate_results)
+
+        for cfg in experiment_E2(a_list=e2_a_list, seeds=_seeds(30)):
+            tasks.append(_nc_task(cfg, "E2", phase, results_root))
+
+        for cfg in experiment_E3(a_list=e3_a_list, seeds=_seeds(75)):
+            tasks.append(_nc_task(cfg, "E3", phase, results_root))
+
+        for cfg in experiment_E4(a=e4_a, n_graph_seeds=30, n_dynamics_seeds_per_graph=5):
+            tasks.append(_nc_task(cfg, "E4", phase, results_root))
+
+        # E8 has no numeric gate dependency: it needs NCP-2's asymmetric-
+        # nucleation *machinery* to exist (it does), not a fitted value from
+        # NCP-2's results, so it runs at its own defaults unconditionally.
+        for cfg in experiment_E8(seeds=_seeds(50)):
+            tasks.append(_ncp_task(cfg, "E8", phase, results_root))
+
+    elif phase == "7s":
+        e2_a_list, e3_a_list, e4_a = _gate1_derived_a_values(gate_results)
+
+        for cfg in experiment_E2(a_list=e2_a_list, seeds=_seeds(30), gossip_protocol="synchronous"):
+            tasks.append(_nc_task(cfg, "E2S", phase, results_root))
+
+        for cfg in experiment_E3(a_list=e3_a_list, seeds=_seeds(75), gossip_protocol="synchronous"):
+            tasks.append(_nc_task(cfg, "E3S", phase, results_root))
+
+        for cfg in experiment_E4(
+            a=e4_a, n_graph_seeds=30, n_dynamics_seeds_per_graph=5, gossip_protocol="synchronous",
+        ):
+            tasks.append(_nc_task(cfg, "E4S", phase, results_root))
+
+        for cfg in experiment_E8(seeds=_seeds(50), gossip_protocol="synchronous"):
+            tasks.append(_ncp_task(cfg, "E8S", phase, results_root))
+
     return tasks
+
+
+def _gate1_derived_a_values(
+    gate_results: Dict[str, Any],
+) -> Tuple[List[float], List[float], float]:
+    """Derive E2's a_list, E3's interior a_list, and E4's operating a from
+    gate1_review.json's ALREADY-COMPUTED NMH-3 phase boundaries (the
+    "nmh3_regime_boundaries" key, prefixed "gate1_" by load_gate_results),
+    rather than a separately-fitted quantity: E2 needs the range of a "across
+    the observed boundaries" (Remark 2.3) -- exactly boundary_i_ii to just
+    past boundary_ii_iii; E3's "fine interior sweep" targets exactly the
+    ambiguous region gate1 itself flagged as unresolved (Annex A.3: "interior
+    ... statistically consistent with both a heavy-tailed stratified interior
+    and containment; high-statistics discrimination outstanding (E3)"), i.e.
+    a fine grid centred on boundary_ii_iii. Falls back to NMH-1/3's own
+    literature defaults when no gate1 file is supplied (first-run behaviour,
+    matching every other phase's fallback pattern).
+    """
+    boundaries = gate_results.get("gate1_nmh3_regime_boundaries", {})
+    b_i_ii = boundaries.get("I_II") or 0.5
+    b_ii_iii = boundaries.get("II_III") or 8.0
+
+    e2_a_list = sorted({round(b_i_ii, 4), round((b_i_ii + b_ii_iii) / 2, 4), round(b_ii_iii, 4), round(b_ii_iii * 1.5, 4)})
+    e3_a_list = sorted({round(b_ii_iii * f, 4) for f in (0.5, 0.65, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5)})
+    e4_a = round((b_i_ii + b_ii_iii) / 2, 4)  # midpoint of the Griffiths interior, matching NMH4's a=2 default at the literature boundaries
+    return e2_a_list, e3_a_list, e4_a
 
 
 # ---------------------------------------------------------------------------

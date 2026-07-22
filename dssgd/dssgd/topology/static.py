@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
@@ -52,6 +52,143 @@ class BarabasiAlbertTopology(Topology):
     def __init__(self, n: int, m: int, seed: int = 0):
         self._G = nx.barabasi_albert_graph(n, m, seed=seed)
         self._W = metropolis_hastings(self._G)
+
+    def step(self, round: int) -> Tuple[nx.Graph, np.ndarray]:
+        return self._G, self._W
+
+
+class OverlappingModularTopology(Topology):
+    """NestedModularTopology with tunable module overlap at one level
+    (Section 11's DAG-nested / overlapping-hierarchy generalisation).
+
+    The communication graph and gossip dynamics are byte-for-byte identical
+    to NestedModularTopology at the same (branching, depth, leaf_size, p,
+    seed) -- overlap does not change the wiring. What changes is the MODULE
+    MEMBERSHIP consumed by the generality/loss machinery (tree_loss.py): at
+    `overlap_level`, `n_overlap` level-`overlap_level` modules are each
+    additionally assigned `delta_in - 1` extra parent modules at level
+    `overlap_level + 1`, chosen uniformly from parents other than their
+    natural one. This gives those modules Hasse in-degree `delta_in` at the
+    overlap boundary -- the tree (delta_in=1) is the n_overlap=0 special case.
+
+    See analysis.tree_loss.in_scope for how this membership metadata is
+    consumed to decide whether a worker is in generality-scope of a source.
+    """
+
+    def __init__(
+        self,
+        branching: int,
+        depth: int,
+        leaf_size: int,
+        p: Optional[float],
+        overlap_level: int,
+        delta_in: int,
+        n_overlap: int,
+        seed: int = 0,
+    ):
+        if not (0 <= overlap_level < depth):
+            raise ValueError(f"overlap_level must be in [0, depth); got {overlap_level}, depth={depth}")
+        if delta_in < 1:
+            raise ValueError(f"delta_in must be >= 1; got {delta_in}")
+
+        base = NestedModularTopology(
+            branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+        )
+        self._G = base._G
+        self._W = base._W
+        self.branching = branching
+        self.depth = depth
+        self.leaf_size = leaf_size
+        self.overlap_level = overlap_level
+        self.delta_in = delta_in
+
+        n_leaf_modules = branching ** depth
+        n_at_ov = n_leaf_modules // (branching ** overlap_level)
+        n_at_ov_plus1 = n_leaf_modules // (branching ** (overlap_level + 1))
+        rng = np.random.default_rng(seed + 777)
+        n_overlap = min(n_overlap, n_at_ov)
+        chosen = rng.choice(n_at_ov, size=n_overlap, replace=False) if n_overlap > 0 else []
+
+        # {level-overlap_level module idx: [extra level-(overlap_level+1) module idxs]}
+        self.extra_parents: Dict[int, List[int]] = {}
+        for k in chosen:
+            natural = int(k) // branching
+            others = [q for q in range(n_at_ov_plus1) if q != natural]
+            n_extra = min(delta_in - 1, len(others))
+            if n_extra > 0:
+                extra = rng.choice(others, size=n_extra, replace=False).tolist()
+                self.extra_parents[int(k)] = [int(q) for q in extra]
+
+    def step(self, round: int) -> Tuple[nx.Graph, np.ndarray]:
+        return self._G, self._W
+
+
+class StarTopology(Topology):
+    """Centralised star K_{1,N-1}: one hub (node 0), N-1 leaf workers.
+
+    Used for the centralised-aggregation experiments (E9, Lemma 6.1 / basin
+    destruction): the hub has no local loss in the runner that consumes this
+    topology, so it plays the role of the paper's server node w_0.
+    """
+
+    def __init__(self, n: int):
+        self._G = nx.star_graph(n - 1)  # hub is node 0, leaves are 1..n-1
+        self._W = metropolis_hastings(self._G)
+        self.hub = 0
+
+    def step(self, round: int) -> Tuple[nx.Graph, np.ndarray]:
+        return self._G, self._W
+
+
+class DumbbellTopology(Topology):
+    """Two dense blocks joined by a tunable-density bipartite bridge.
+
+    Used for the matched-spectral-gap comparison against the NMH (E10,
+    Remark 7.1): unlike the NMH's geometric ladder of L relaxation scales,
+    the dumbbell has exactly one slow mode (the bottleneck), so a bridge
+    density tuned to match the NMH's second-largest eigenvalue at the same N
+    gives two graphs with identical spectral gap but categorically different
+    mode structure.
+
+    Parameters
+    ----------
+    block_size : int
+        Number of nodes in each of the two blocks (total N = 2*block_size).
+    bridge_p : float
+        Independent bridge-edge probability between every cross-block pair.
+        Tune this (e.g. via topology.base.spectral_gap + a bisection search)
+        to match a target second eigenvalue.
+    """
+
+    def __init__(self, block_size: int, bridge_p: float, seed: int = 0):
+        if not (0.0 < bridge_p <= 1.0):
+            raise ValueError(f"bridge_p must be in (0, 1]; got {bridge_p}")
+        rng = np.random.default_rng(seed)
+        n = 2 * block_size
+        G = nx.Graph()
+        G.add_nodes_from(range(n))
+        block_a = list(range(block_size))
+        block_b = list(range(block_size, n))
+        G.add_edges_from(
+            (block_a[i], block_a[j])
+            for i in range(block_size) for j in range(i + 1, block_size)
+        )
+        G.add_edges_from(
+            (block_b[i], block_b[j])
+            for i in range(block_size) for j in range(i + 1, block_size)
+        )
+        for u in block_a:
+            for v in block_b:
+                if rng.random() < bridge_p:
+                    G.add_edge(u, v)
+        if not nx.is_connected(G):
+            # Guarantee connectivity with a single deterministic bridge edge
+            # without disturbing the (already-sampled) bridge_p statistics.
+            G.add_edge(block_a[0], block_b[0])
+        self._G = G
+        self._W = metropolis_hastings(G)
+        self.block_size = block_size
+        self.bridge_p = bridge_p
 
     def step(self, round: int) -> Tuple[nx.Graph, np.ndarray]:
         return self._G, self._W

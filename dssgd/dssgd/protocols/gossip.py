@@ -174,6 +174,71 @@ class AsynchronousGossip(Protocol):
             )
 
 
+class BoundedStalenessGossip(AsynchronousGossip):
+    """AsynchronousGossip with a per-edge staleness lock (Experiment E11,
+    Remark 4.3's "restorable by per-boundary seed-locking or bounded staleness").
+
+    Identical kick mechanics to AsynchronousGossip, except an edge (i,j) that
+    fired within the last `staleness_bound` rounds is skipped on subsequent
+    draws (the event is dropped, not retried) until the lock expires. This
+    approximates round-synchronous, renewal-enforcing scheduling (H-sched)
+    without going fully synchronous: a single seed's fixation contest along
+    a given edge gets `staleness_bound` rounds to resolve before that edge
+    can re-fire, capping (rather than eliminating) seed accumulation.
+
+    `staleness_bound=0` recovers AsynchronousGossip exactly (no lock).
+    Callers must set `.round_idx` each round (same convention as
+    provenance.ProvenanceAsyncGossip) so the lock can measure elapsed rounds.
+    """
+
+    def __init__(self, *args, staleness_bound: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.staleness_bound = staleness_bound
+        self.round_idx: int = 0
+        self._last_fired: dict = {}  # frozenset({i,j}) -> round_idx last fired
+
+    def execute(self, comm_round: CommunicationRound, agents: List[Agent]):
+        self._round_counter += 1
+
+        if self.mode == "fixed":
+            if self._round_counter % self.interval != 0:
+                return
+            n_events = int(self.rate)
+        else:
+            n_events = int(self._rng.poisson(self.rate))
+
+        if n_events == 0 or not agents:
+            return
+
+        agent_map = {a.id: a for a in agents}
+        G = comm_round.graph
+
+        for _ in range(n_events):
+            initiator = agents[int(self._rng.integers(len(agents)))]
+            neighbours = list(G.neighbors(initiator.id))
+            if not neighbours:
+                continue
+            sender_id = neighbours[int(self._rng.integers(len(neighbours)))]
+            sender = agent_map.get(sender_id)
+            if sender is None:
+                continue
+
+            edge_key = frozenset((initiator.id, sender_id))
+            last = self._last_fired.get(edge_key)
+            if last is not None and self.round_idx - last < self.staleness_bound:
+                continue  # edge locked: drop this event rather than retry
+            self._last_fired[edge_key] = self.round_idx
+
+            sender_state = sender.get_state(comm_round.state_keys, comm_round.param_mask)
+            self_state = initiator.get_state(comm_round.state_keys, comm_round.param_mask)
+
+            initiator.aggregate(
+                comm_round,
+                {initiator.id: self_state, sender_id: sender_state},
+                {initiator.id: 1.0 - self.alpha, sender_id: self.alpha},
+            )
+
+
 class CompositeProtocol(Protocol):
     """Applies a sequence of protocols in order each communication round.
 

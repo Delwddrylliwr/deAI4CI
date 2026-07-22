@@ -9,7 +9,9 @@ Implements formulas from the McKean-Vlasov / Fokker-Planck analysis:
 """
 
 import math
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
 
 
 # ---------------------------------------------------------------------------
@@ -277,3 +279,194 @@ def total_flip_time(
     if d <= ell_c or T_eff <= 0.0:
         return t_det
     return t_det + kramers_escape_time(T_eff, dV_effective)
+
+
+# ---------------------------------------------------------------------------
+# Bistable chord geometry (Lemma 2.1) and fixation (Lemma 3.1)
+# ---------------------------------------------------------------------------
+#
+# active_escape.make_bistable_loss_fn implements
+#   L(theta) = (a/2)*||theta-A||^2*||theta-B||^2/||Delta||^2 - b*(theta-M).dir_hat
+# Restricting to the coordinate s along the A->B axis (theta = A + s*Delta,
+# ||Delta|| = delta_norm) and writing mu = b / (a * delta_norm):
+#   L(s) / (a * delta_norm^2) = (1/2)*s^2*(1-s)^2 - mu*(s - 1/2)
+# Critical points solve g(s) := s*(1-s)*(1-2s) = mu, a cubic with three real
+# roots (bistable) iff |mu| < max_{s in (0,1/2)} g(s) = 1/(6*sqrt(3)).  This
+# is the repo-specific analogue of the paper's dimensionless tilt lambda and
+# saddle-node constant kappa_phi (paper Lemma 2.1); it differs from the
+# paper's kappa_phi = 1/(3*sqrt(3)) by a factor of 2 because this loss
+# family's well term carries a 1/2 prefactor that the paper's canonical
+# family (its eq. 2.6) does not -- the qualitative structure (chord fractions
+# depend on (a,b) only through mu; bistability bound; saddle merges with a
+# minimum as |mu| -> the bound) is identical.
+
+KAPPA_PHI = 1.0 / (6.0 * math.sqrt(3.0))
+"""Saddle-node bound on mu = b/(a*delta_norm) for this repo's bistable well."""
+
+
+def dimensionless_tilt(a: float, b: float, delta_norm: float = 1.0) -> float:
+    """lambda = mu / KAPPA_PHI, this repo's analogue of the paper's Lemma-2.1
+    dimensionless tilt.  lambda in [0, 1); lambda -> 1 is the saddle-node
+    point at which basin A merges with the saddle and ceases to exist.
+    """
+    if a <= 0:
+        raise ValueError("a must be positive")
+    return (b / (a * delta_norm)) / KAPPA_PHI
+
+
+def _saddle_node_roots(mu: float) -> Tuple[float, float, float]:
+    """Solve g(s) = s*(1-s)*(1-2s) = mu, i.e. 2*s^3 - 3*s^2 + s - mu = 0.
+
+    Returns the three real roots sorted ascending (s_A, s_dagger, s_B).
+    Raises ValueError if |mu| >= KAPPA_PHI (outside the bistable range).
+    """
+    if abs(mu) >= KAPPA_PHI:
+        raise ValueError(
+            f"mu={mu} outside the bistable range (|mu| < {KAPPA_PHI:.6f}); "
+            f"one basin has merged with the saddle at this (a,b)."
+        )
+    roots = np.roots([2.0, -3.0, 1.0, -mu])
+    real_roots = sorted(r.real for r in roots if abs(r.imag) < 1e-9)
+    if len(real_roots) != 3:
+        raise ValueError(f"Expected 3 real roots at mu={mu}, got {len(real_roots)}")
+    return real_roots[0], real_roots[1], real_roots[2]
+
+
+def curvature_epsilon(r: float) -> float:
+    """Amplitude-modulation parameter eps(r) = 2(r-1)/(r+1) for the asymmetric
+    well active_escape.make_asymmetric_bistable_loss_fn implements (Lemma 10.1):
+
+        L_r(theta) = (a/2)*Q(theta)*(1 + eps*T(theta)) - b*Bias(theta)
+
+    where Q, Bias are as in the r=1 family and T(theta) = proj(theta) - 1/2.
+    At mu=0 this gives curvature(s=1)/curvature(s=0) = (1+eps/2)/(1-eps/2)
+    exactly, hence r = curvature_sharp/curvature_flat via this inversion
+    (r >= 1 by convention; eps > 0 makes B the sharp side).  eps=0 (r=1)
+    recovers the symmetric family of Lemma 2.1 exactly.
+    """
+    if r <= 0:
+        raise ValueError("r (curvature ratio) must be positive")
+    return 2.0 * (r - 1.0) / (r + 1.0)
+
+
+def _asym_crit_eq(s: float, mu: float, eps: float) -> float:
+    """f_r'(s) - mu, where f_r(s) = (1/2)*h(s)*(1 + eps*(s-1/2)), h(s)=s^2(1-s)^2.
+
+    Derivative: f_r'(s) = g(s) + (eps/2)*(2*g(s)*(s-1/2) + h(s)), g(s)=s(1-s)(1-2s).
+    """
+    h = s ** 2 * (1.0 - s) ** 2
+    g = s * (1.0 - s) * (1.0 - 2.0 * s)
+    fprime = g + (eps / 2.0) * (2.0 * g * (s - 0.5) + h)
+    return fprime - mu
+
+
+def _saddle_node_roots_asym(
+    mu: float, eps: float, s_lo: float = -0.5, s_hi: float = 1.5, n_scan: int = 4000,
+) -> Tuple[float, float, float]:
+    """Numeric root-finding for f_r'(s) = mu when eps != 0 (general r).
+
+    f_r'(s) - mu is a quartic in s when eps != 0 (up to 4 real roots), so this
+    scans for sign changes on a dense grid and refines each with bisection,
+    rather than assuming a fixed polynomial degree. Exactly 3 roots are
+    expected in the physical window for moderate |eps| and |mu| (the paper's
+    own scope: Lemma 10.1's factorisation is stated as exact only in the
+    "small-tilt, moderate-r regime") -- a 4th root, if present, indicates eps
+    or mu has left that regime, and is treated as an error rather than
+    silently disambiguated.
+    """
+    from scipy.optimize import brentq
+
+    s_grid = np.linspace(s_lo, s_hi, n_scan)
+    vals = np.array([_asym_crit_eq(s, mu, eps) for s in s_grid])
+    roots: List[float] = []
+    for i in range(len(s_grid) - 1):
+        if vals[i] == 0.0:
+            roots.append(float(s_grid[i]))
+        elif vals[i] * vals[i + 1] < 0:
+            roots.append(brentq(_asym_crit_eq, s_grid[i], s_grid[i + 1], args=(mu, eps)))
+    if len(roots) != 3:
+        raise ValueError(
+            f"mu={mu}, eps={eps} (r): expected 3 critical points in the "
+            f"small-tilt/moderate-r regime, found {len(roots)}. Reduce |b/a| "
+            f"or bring r closer to 1."
+        )
+    roots.sort()
+    return roots[0], roots[1], roots[2]
+
+
+def chord_geometry(a: float, b: float, delta_norm: float = 1.0, r: float = 1.0) -> Dict[str, float]:
+    """Chord-fraction single-kick success thresholds (eq. 2.5) computed from
+    the loss geometry alone -- lambda, the three critical points s_A <
+    s_dagger < s_B, and the normalised thresholds vartheta_{A->B},
+    vartheta_{B->A} for crossing from one basin to the other.
+
+    r is the curvature ratio of Lemma 10.1 (r=1: the equal-curvature family
+    of Lemma 2.1, using the fast exact cubic solver; r!=1: the asymmetric
+    well of curvature_epsilon, using numeric root-finding).
+    """
+    mu = b / (a * delta_norm)
+    if r == 1.0:
+        s_A, s_dagger, s_B = _saddle_node_roots(mu)
+    else:
+        eps = curvature_epsilon(r)
+        s_A, s_dagger, s_B = _saddle_node_roots_asym(mu, eps)
+    chord = s_B - s_A
+    return {
+        "lambda": mu / KAPPA_PHI,
+        "r": r,
+        "s_A": s_A,
+        "s_dagger": s_dagger,
+        "s_B": s_B,
+        "vartheta_A_to_B": (s_dagger - s_A) / chord,
+        "vartheta_B_to_A": (s_B - s_dagger) / chord,
+    }
+
+
+def fixation_bias(
+    a: float, b: float, kick_weight: float, delta_norm: float = 1.0, r: float = 1.0,
+) -> float:
+    """Birth-death bias rho = p_-/p_+ of Lemma 3.1, computed (not fitted)
+    from the loss geometry and a single fixed kick weight.
+
+    This repo's kick-weight law mu_C is degenerate: AsynchronousGossip pulls
+    with a single fixed mixing weight (`alpha`/`gossip_alpha`), not a
+    continuous law, so p_+ = 1[kick_weight >= vartheta_{A->B}] and
+    p_- = 1[kick_weight >= vartheta_{B->A}] are indicators rather than the
+    genuinely continuous probabilities Lemma 3.1 anticipates from a richer
+    kick-weight law. rho therefore reduces to a step function of lambda at
+    fixed kick_weight (e.g. rho=0 for every lambda>0 at the default
+    alpha=0.5, since vartheta_{A->B} < 0.5 < vartheta_{B->A} for any
+    B-favouring tilt).
+
+    Caveat (Experiment E7): whether this single-kick-then-fully-relax
+    idealisation matches the fixation frequency actually observed under the
+    repo's dynamics -- where local gradient steps and gossip kicks are
+    interleaved `local_steps` times per measurement round rather than one
+    kick fully relaxing before the next -- is exactly what E7 tests. This
+    function is deliberately kept literal to Lemma 3.1 rather than curve-fit
+    to simulation; disagreement with measured fixation frequency is
+    informative, not a bug to silently patch over.
+    """
+    geom = chord_geometry(a, b, delta_norm, r=r)
+    p_plus = 1.0 if kick_weight >= geom["vartheta_A_to_B"] else 0.0
+    p_minus = 1.0 if kick_weight >= geom["vartheta_B_to_A"] else 0.0
+    if p_plus == 0.0:
+        return math.inf
+    return p_minus / p_plus
+
+
+def fixation_probability(j: int, m: int, rho: float) -> float:
+    """q_fix(j; m, rho) of Lemma 3.1: probability that a module of size m
+    started from j seeds fixes at all-B before reverting to all-A.
+
+        q_fix = (1 - rho^j) / (1 - rho^m),   rho not in {0, 1, inf}
+        q_fix = j / m,                       rho == 1 (symmetric random walk)
+        q_fix = 1[j == m],                   rho == inf (up-moves impossible)
+    """
+    if m <= 0 or not (0 <= j <= m):
+        raise ValueError(f"require 0 <= j <= m and m > 0, got j={j}, m={m}")
+    if math.isinf(rho):
+        return 1.0 if j == m else 0.0
+    if math.isclose(rho, 1.0, abs_tol=1e-9):
+        return j / m
+    return (1.0 - rho ** j) / (1.0 - rho ** m)

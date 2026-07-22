@@ -32,6 +32,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from . import theory
+from .generality import per_leaf_loss_params_for_generality
 from .natural_cascade import NaturalCascadeConfig
 
 
@@ -442,6 +444,417 @@ def experiment_NMH6(
 # ---------------------------------------------------------------------------
 # NMH-7: Detailed balance and Gibbs structure (symmetric basins)
 # ---------------------------------------------------------------------------
+
+
+
+# ---------------------------------------------------------------------------
+# E1: Provenance tracing + gossip-severed control (Cor. 3.5, Prop. 3.4)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E1(
+    a_list: List[float] = (0.5, 1.0, 2.0, 4.0),
+    b: float = 0.042,
+    sigma_list: List[float] = (0.0, 0.01),
+    sever_min_distances: List[Optional[int]] = (None, 1, 2, 3),
+    seeds: List[int] = tuple(range(30)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+) -> List[NaturalCascadeConfig]:
+    """Provenance tracing (kick vs escape attribution) at matched (a,b,sigma)
+    operating points, plus the gossip-severed control at several severing
+    distances (sever_min_distances includes None = no severing, i.e. the
+    ordinary provenance-tracked run) -- Proposition 3.4's slope-0 null is
+    read off the severed variants, cascade-attributable statistics off the
+    unsevered ones, both via the SAME track_provenance=True mechanism.
+    async_poisson only (provenance requires it).
+    """
+    configs = []
+    for a in a_list:
+        for sigma in sigma_list:
+            for sever_d in sever_min_distances:
+                tag = "none" if sever_d is None else str(sever_d)
+                for seed in seeds:
+                    configs.append(NaturalCascadeConfig(
+                        name=f"E1/a={a}/sigma={sigma}/sever={tag}/seed={seed}",
+                        depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                        n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                        a=a, b=b, flip_noise_scale=sigma,
+                        force_flip_source=(sever_d is None), track_provenance=True,
+                        sever_min_distance=sever_d, gossip_protocol="async_poisson",
+                    ))
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# E2: Fixed-lambda sweep (Remark 2.3)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E2(
+    a_list: List[float] = (0.5, 1.0, 2.0, 4.0, 8.0),
+    a_anchor: float = 0.5,
+    b_anchor: float = 0.042,
+    seeds: List[int] = tuple(range(30)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    gossip_protocol: str = "async_poisson",
+) -> List[NaturalCascadeConfig]:
+    """Fixed-lambda sweep: b co-varies with a to hold lambda constant at the
+    validated a=0.5 anchor, while a ranges across the boundary observed
+    under a fixed-b sweep (NMH-3). Discriminates the geometric criterion
+    (transmission uniform across this sweep) from the energetic criterion
+    (the boundary reappears at the same absolute a as NMH-3), per Remark 2.3.
+    """
+    lam = theory.dimensionless_tilt(a_anchor, b_anchor)
+    prefix = "E2S" if gossip_protocol != "async_poisson" else "E2"
+    configs = []
+    for a in a_list:
+        b = lam * theory.KAPPA_PHI * a
+        for seed in seeds:
+            configs.append(NaturalCascadeConfig(
+                name=f"{prefix}/a={a}/lambda={lam:.4f}/seed={seed}",
+                depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                a=a, b=b, force_flip_source=True, flip_noise_scale=0.0,
+                gossip_protocol=gossip_protocol,
+            ))
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# E3: Fine interior sweep + hysteresis (Section 4.5, boundary-ratio constraint)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E3(
+    a_list: List[float] = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0),
+    b: float = 0.042,
+    seeds: List[int] = tuple(range(75)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    init_basins: List[str] = ("A", "B"),
+    gossip_protocol: str = "async_poisson",
+) -> List[NaturalCascadeConfig]:
+    """Fine interior sweep at high seed count (staircase in d_max vs cliff),
+    run from BOTH all-A and all-B initialisation (hysteresis test): a single
+    leaf is force-flipped against the bulk's basin in each case (init_basin=A
+    forces one leaf to B; init_basin=B forces one leaf to A -- the runner
+    picks the flip target as the opposite of init_basin automatically), and
+    the question is whether that "wrong-direction" leaf is reabsorbed by the
+    ratchet (expected, if the bulk's basin is genuinely favoured at this a)
+    or persists/cascades (a hysteresis break -- the reachable phase would
+    then depend on initial condition, not just (a,b)).
+    """
+    prefix = "E3S" if gossip_protocol != "async_poisson" else "E3"
+    configs = []
+    for a in a_list:
+        for init_basin in init_basins:
+            for seed in seeds:
+                configs.append(NaturalCascadeConfig(
+                    name=f"{prefix}/a={a}/init={init_basin}/seed={seed}",
+                    depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                    n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                    a=a, b=b, init_basin=init_basin, force_flip_source=True,
+                    flip_noise_scale=0.0, gossip_protocol=gossip_protocol,
+                ))
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# E4: Quenched vs annealed cascade-size tails (Proposition 4.7)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E4(
+    a: float = 2.0,
+    b: float = 0.042,
+    n_graph_seeds: int = 30,
+    n_dynamics_seeds_per_graph: int = 5,
+    depth: int = 7,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    gossip_protocol: str = "async_poisson",
+) -> List[NaturalCascadeConfig]:
+    """Quenched-vs-annealed cascade tail comparison: decouples the topology
+    draw (graph_seed) from the dynamics draw (seed) so the same quenched
+    wiring realisation can be replayed against multiple dynamics seeds (the
+    quenched ensemble: fixed graph_seed, varying seed) while the graph also
+    varies across the outer loop (the annealed ensemble: pool over all
+    graph_seed values) -- both are read off the same task list, grouped
+    differently at analysis time (with nmh_observables.realized_cross_edge_count
+    keyed on graph_seed, not seed). depth=7 matches NMH-4's deeper hierarchy.
+    """
+    prefix = "E4S" if gossip_protocol != "async_poisson" else "E4"
+    configs = []
+    for g in range(n_graph_seeds):
+        for d in range(n_dynamics_seeds_per_graph):
+            dynamics_seed = g * n_dynamics_seeds_per_graph + d
+            configs.append(NaturalCascadeConfig(
+                name=f"{prefix}/graph_seed={g}/seed={dynamics_seed}",
+                depth=depth, leaf_size=leaf_size, p=p, seed=dynamics_seed, graph_seed=g,
+                n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                a=a, b=b, force_flip_source=True, flip_noise_scale=0.0,
+                gossip_protocol=gossip_protocol,
+            ))
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# E5: sigma-sweep for the crossover stage l_c (eq. 3.6)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E5(
+    sigma_list: List[float] = (0.0, 0.001, 0.005, 0.01, 0.02, 0.05),
+    a: float = 2.0,
+    b: float = 0.042,
+    seeds: List[int] = tuple(range(30)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+) -> List[NaturalCascadeConfig]:
+    """sigma-sweep at fixed (a,b,epsilon): track_provenance=True so l_c
+    (highest hierarchical distance still kick-attributed) can be computed
+    post-hoc from the returned event log via provenance.crossover_stage.
+    async_poisson only -- event-level attribution is undefined for
+    synchronous gossip (natural_cascade.py raises if combined).
+    """
+    configs = []
+    for sigma in sigma_list:
+        for seed in seeds:
+            configs.append(NaturalCascadeConfig(
+                name=f"E5/sigma={sigma}/seed={seed}",
+                depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                a=a, b=b, flip_noise_scale=sigma, force_flip_source=False,
+                track_provenance=True, gossip_protocol="async_poisson",
+            ))
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# E6 / E12(a): Level-matching filter and overfitting-as-low-generality
+# ---------------------------------------------------------------------------
+#
+# Both experiments realise Definition 4.2's tree-structured heterogeneity
+# model via the EXISTING per_leaf_loss_params mechanism (built for NMH-6):
+# in-scope leaves (generality.in_scope, level=G) get a favourable per-leaf
+# bias, out-of-scope leaves an unfavourable one. E12(a)'s "overfitting
+# injected at scale l" is, by the paper's own reduction (Prop. 4.9's proof:
+# "the containment half of Theorem 4.5 applies verbatim"), exactly this
+# mechanism with generality_level=l -- so one factory serves both,
+# parametrised by which generality level is under test.
+
+
+def experiment_E6(
+    generality_levels: List[int] = (1, 2, 3, 4, 5),
+    a: float = 0.5,
+    b_in: float = 0.042,
+    b_out: float = 0.042,
+    seeds: List[int] = tuple(range(50)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    source_leaf: int = 0,
+    gossip_protocol: str = "async_poisson",
+) -> List[NaturalCascadeConfig]:
+    """E6: controlled generality level G(b) via per-leaf bias; measures
+    max propagation depth d_max vs G (Theorem 4.5's level-matching filter).
+    Use nmh_observables.cascade_depth(centroid_traj, source_leaf=source_leaf,
+    ...) on the returned run to read off d_max, and check it equals G.
+    """
+    branching = 2
+    n_leaf_types = branching ** depth
+    prefix = "E6S" if gossip_protocol != "async_poisson" else "E6"
+    configs = []
+    for G in generality_levels:
+        plp = per_leaf_loss_params_for_generality(
+            n_leaf_types=n_leaf_types, source_leaf=source_leaf, generality_level=G,
+            branching=branching, a=a, b_in=b_in, b_out=b_out,
+        )
+        for seed in seeds:
+            configs.append(NaturalCascadeConfig(
+                name=f"{prefix}/G={G}/seed={seed}",
+                branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=False,
+                gossip_protocol=gossip_protocol,
+            ))
+    return configs
+
+
+def experiment_E12a(
+    overfit_scales: List[int] = (1, 2, 3),
+    a: float = 0.5,
+    b_in: float = 0.042,
+    b_out: float = 0.042,
+    seeds: List[int] = tuple(range(50)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    source_leaf: int = 0,
+    gossip_protocol: str = "async_poisson",
+) -> List[NaturalCascadeConfig]:
+    """E12(a): overfitting-as-low-generality (Prop. 4.9). Identical
+    mechanism to E6 with generality_level = the injected overfitting scale
+    l: containment (d_max <= l with probability -> 1 in m) is the same
+    Theorem-4.5 bound, read on a basin relabelled "overfit at scale l"
+    rather than "innovation with G(b)=l" -- the paper's point is that these
+    are the same object.
+    """
+    configs = experiment_E6(
+        generality_levels=list(overfit_scales), a=a, b_in=b_in, b_out=b_out, seeds=seeds,
+        depth=depth, leaf_size=leaf_size, p=p, lr=lr, local_steps=local_steps,
+        n_warmup=n_warmup, n_meas=n_meas, source_leaf=source_leaf,
+        gossip_protocol=gossip_protocol,
+    )
+    prefix = "E12aS" if gossip_protocol != "async_poisson" else "E12a"
+    for cfg in configs:
+        cfg.name = cfg.name.replace("E6S/", f"{prefix}/").replace("E6/", f"{prefix}/")
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# E11: Scheduling sweep (Remark 4.3)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E11(
+    schedulings: List[Tuple[str, int]] = (
+        ("synchronous", 0), ("async_poisson", 0), ("bounded_staleness", 2),
+        ("bounded_staleness", 5), ("bounded_staleness", 10),
+    ),
+    a_list: List[float] = (0.5, 1.0, 2.0, 4.0),
+    seeds: List[int] = tuple(range(30)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    b: float = 0.042,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+) -> List[NaturalCascadeConfig]:
+    """Scheduling sweep at fixed (a,b,epsilon): (i) round-synchronous,
+    (ii) free per-edge async, (iii) bounded-staleness at several staleness
+    bounds. track_provenance=True wherever the protocol is async_poisson-
+    based (bounded_staleness's event mechanics are the same class, but
+    provenance tracking is only implemented for AsynchronousGossip and its
+    subclasses via ProvenanceAsyncGossip -- bounded_staleness therefore runs
+    WITHOUT provenance filtering here; the concavity/slope test on raw
+    log2(T_flip) vs d is still meaningful, just not provenance-filtered).
+    """
+    configs = []
+    for protocol, staleness in schedulings:
+        for a in a_list:
+            for seed in seeds:
+                configs.append(NaturalCascadeConfig(
+                    name=f"E11/proto={protocol}/stale={staleness}/a={a}/seed={seed}",
+                    depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                    n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                    a=a, b=b, force_flip_source=True, flip_noise_scale=0.0,
+                    gossip_protocol=protocol, staleness_bound=staleness,
+                    track_provenance=(protocol == "async_poisson"),
+                ))
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# E13: DAG-nested ideal-matching filter (Section 11, Theorem 11.3)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E13(
+    delta_in_list: List[int] = (1, 2, 3, 4),
+    m_list: List[int] = (4, 8, 16, 32),
+    overlap_level: int = 1,
+    n_overlap: int = 4,
+    a: float = 0.5,
+    b_in: float = 0.042,
+    b_out: float = 0.042,
+    seeds: List[int] = tuple(range(30)),
+    depth: int = 5,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    source_leaf: int = 0,
+    gossip_protocol: str = "async_poisson",
+) -> List[NaturalCascadeConfig]:
+    """DAG nesting: overlapping module hierarchies with tunable boundary
+    in-degree Delta_in (delta_in) at `overlap_level`; a favourable ideal
+    I(b) set by generality_level = overlap_level + 1 (so the boundary being
+    tested is exactly the overlap boundary), swept against module size m
+    (leaf_size) to locate the containment boundary m*(Delta_in) predicted
+    by Theorem 11.3 / Proposition 11.2. delta_in=1 is the tree (n_overlap
+    irrelevant -- OverlappingModularTopology's OverlapInfo is empty).
+    """
+    branching = 2
+    n_leaf_types = branching ** depth
+    prefix = "E13S" if gossip_protocol != "async_poisson" else "E13"
+    configs = []
+    for delta_in in delta_in_list:
+        for m in m_list:
+            from .generality import OverlapInfo, per_leaf_loss_params_for_generality as _plp
+
+            # Build the SAME overlap assignment the topology will draw (same
+            # seed formula as OverlappingModularTopology's internal rng),
+            # so per_leaf_loss_params matches the actual extra-parent map.
+            for seed in seeds:
+                from dssgd.topology.static import OverlappingModularTopology
+                topo = OverlappingModularTopology(
+                    branching=branching, depth=depth, leaf_size=m, p=p,
+                    overlap_level=overlap_level, delta_in=delta_in, n_overlap=n_overlap,
+                    seed=seed,
+                )
+                overlap = OverlapInfo(overlap_level=overlap_level, extra_parents=topo.extra_parents)
+                plp = _plp(
+                    n_leaf_types=n_leaf_types, source_leaf=source_leaf,
+                    generality_level=overlap_level + 1, branching=branching,
+                    a=a, b_in=b_in, b_out=b_out, overlap=overlap,
+                )
+                configs.append(NaturalCascadeConfig(
+                    name=f"{prefix}/delta_in={delta_in}/m={m}/seed={seed}",
+                    branching=branching, depth=depth, leaf_size=m, p=p, seed=seed,
+                    n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                    a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=False,
+                    overlap_level=overlap_level, delta_in=delta_in, n_overlap=n_overlap,
+                    gossip_protocol=gossip_protocol,
+                ))
+    return configs
 
 
 def experiment_NMH7(

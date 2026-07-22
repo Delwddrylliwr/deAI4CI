@@ -51,6 +51,17 @@ def dict_to_ncp_config(d: Dict[str, Any]):
     return NCPSimConfig(**kwargs)
 
 
+def dict_to_generic_config(d: Dict[str, Any]):
+    """Reconstruct GenericTopologyConfig from a dict produced by config_to_dict."""
+    from analysis.generic_topology_runner import GenericTopologyConfig
+
+    kwargs = dict(d)
+    for key in ("theta_A", "theta_B"):
+        if kwargs.get(key) is not None:
+            kwargs[key] = np.array(kwargs[key], dtype=np.float32)
+    return GenericTopologyConfig(**kwargs)
+
+
 def task_id_from_config(config) -> str:
     """Stable filesystem-safe task ID matching run_timesep.py's cache-key formula."""
     return config.name.replace("/", "__").replace("=", "")

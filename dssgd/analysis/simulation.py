@@ -19,6 +19,7 @@ from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
 from dssgd.protocols.gossip import GossipAveraging
+from dssgd.topology.base import spectral_gap as _spectral_gap
 from dssgd.topology.multilayer import MultiLayerTopology
 from dssgd.topology.static import NestedModularTopology
 
@@ -94,11 +95,6 @@ def _cross_centroid_distance(
     stacked = torch.stack(centroids)
     grand = stacked.mean(0)
     return float(torch.stack([(c - grand).norm(2) for c in centroids]).mean())
-
-
-def _spectral_gap(W: np.ndarray) -> float:
-    eigvals = np.sort(np.abs(np.linalg.eigvalsh(W)))[::-1]
-    return float(1.0 - eigvals[1]) if len(eigvals) > 1 else 1.0
 
 
 def _measure_topology(
