@@ -240,14 +240,23 @@ def main() -> None:
     parser.add_argument("--phase1-results", type=Path, default=Path("results/phase1"))
     parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase1"))
     parser.add_argument("--output-dir", type=Path, default=Path("review"))
+    parser.add_argument(
+        "--suffix", type=str, default="",
+        help="Suffix appended to NMH1/NMH3 pkl dir names for the "
+             "synchronous variant (e.g. 'S' for phase 1s: NMH1S/NMH3S -- "
+             "see generate_queue.py's phase=='1s' branch). NCP1 is "
+             "graph-only (no gossip protocol) and NMH7_pilot has no "
+             "synchronous variant, so neither is affected by --suffix.",
+    )
     args = parser.parse_args()
 
     results_dir = args.phase1_results
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    suffix = args.suffix
 
     # -- NMH-1 slopes --
-    nmh1_pkl_dir = results_dir / "pkl" / "NMH1"
+    nmh1_pkl_dir = results_dir / "pkl" / f"NMH1{suffix}"
     nmh1_slopes: Dict[float, Tuple[float, float, int]] = {}
     if nmh1_pkl_dir.exists():
         nmh1_slopes = compute_nmh1_slopes(nmh1_pkl_dir)
@@ -264,7 +273,7 @@ def main() -> None:
         print(f"  [warn] {nmh1_pkl_dir} not found — skipping NMH-1 slopes")
 
     # -- NMH-3 phase structure --
-    nmh3_pkl_dir = results_dir / "pkl" / "NMH3"
+    nmh3_pkl_dir = results_dir / "pkl" / f"NMH3{suffix}"
     depths: Dict[float, Tuple[float, float, int]] = {}
     boundary_i_ii: Optional[float] = None
     boundary_ii_iii: Optional[float] = None

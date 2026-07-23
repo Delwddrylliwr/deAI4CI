@@ -132,34 +132,49 @@ def main() -> None:
     parser.add_argument("--phase6-results", type=Path, default=Path("results/phase6a"))
     parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase6a"))
     parser.add_argument("--output-dir", type=Path, default=Path("review"))
+    parser.add_argument(
+        "--suffix", type=str, default="",
+        help="Suffix appended to E12a/E12b pkl dir names for the synchronous "
+             "variant (e.g. 'S' for phase 6s: E12aS/E12bS -- see "
+             "generate_queue.py's phase=='6s' branch). Phase 6s has no "
+             "synchronous variant of E5/E11, so those are skipped entirely "
+             "when --suffix is set.",
+    )
     args = parser.parse_args()
 
     results_dir = args.phase6_results
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    suffix = args.suffix
 
-    e5_pkl_dir = results_dir / "pkl" / "E5"
     e5_rows: List[Dict[str, Any]] = []
-    if e5_pkl_dir.exists():
-        e5_rows = compute_e5_crossover(e5_pkl_dir)
-        _write_csv(output_dir / "gate6_e5_crossover.csv", e5_rows)
-        print(f"E5 crossover: {e5_rows}")
+    if suffix:
+        print("  [skip] E5 has no synchronous variant (phase 6s) — skipping")
     else:
-        print(f"  [warn] {e5_pkl_dir} not found — skipping E5")
+        e5_pkl_dir = results_dir / "pkl" / "E5"
+        if e5_pkl_dir.exists():
+            e5_rows = compute_e5_crossover(e5_pkl_dir)
+            _write_csv(output_dir / "gate6_e5_crossover.csv", e5_rows)
+            print(f"E5 crossover: {e5_rows}")
+        else:
+            print(f"  [warn] {e5_pkl_dir} not found — skipping E5")
 
-    e11_pkl_dir = results_dir / "pkl" / "E11"
     e11_rows: List[Dict[str, Any]] = []
     e11_ok = False
-    if e11_pkl_dir.exists():
-        e11_rows = compute_e11_slopes(e11_pkl_dir)
-        _write_csv(output_dir / "gate6_e11_slopes.csv", e11_rows)
-        sync_slopes = [r["slope"] for r in e11_rows if r["protocol"] == "synchronous" and not math.isnan(r["slope"])]
-        e11_ok = bool(sync_slopes) and all(abs(s - 1.0) < 0.3 for s in sync_slopes)
-        print(f"E11 slopes: {e11_rows}")
+    if suffix:
+        print("  [skip] E11 has no synchronous variant (phase 6s) — skipping")
     else:
-        print(f"  [warn] {e11_pkl_dir} not found — skipping E11")
+        e11_pkl_dir = results_dir / "pkl" / "E11"
+        if e11_pkl_dir.exists():
+            e11_rows = compute_e11_slopes(e11_pkl_dir)
+            _write_csv(output_dir / "gate6_e11_slopes.csv", e11_rows)
+            sync_slopes = [r["slope"] for r in e11_rows if r["protocol"] == "synchronous" and not math.isnan(r["slope"])]
+            e11_ok = bool(sync_slopes) and all(abs(s - 1.0) < 0.3 for s in sync_slopes)
+            print(f"E11 slopes: {e11_rows}")
+        else:
+            print(f"  [warn] {e11_pkl_dir} not found — skipping E11")
 
-    e12a_pkl_dir = results_dir / "pkl" / "E12a"
+    e12a_pkl_dir = results_dir / "pkl" / f"E12a{suffix}"
     e12a_rows: List[Dict[str, Any]] = []
     e12a_ok = False
     if e12a_pkl_dir.exists():
@@ -171,7 +186,7 @@ def main() -> None:
     else:
         print(f"  [warn] {e12a_pkl_dir} not found — skipping E12a")
 
-    e12b_pkl_dir = results_dir / "pkl" / "E12b"
+    e12b_pkl_dir = results_dir / "pkl" / f"E12b{suffix}"
     e12b_rows: List[Dict[str, Any]] = []
     e12b_ok = False
     if e12b_pkl_dir.exists():
@@ -193,7 +208,7 @@ def main() -> None:
         print(f"  [warn] {e12b_pkl_dir} not found — skipping E12b")
 
     task_counts = _task_counts(args.queue_dir)
-    gate_pass = e11_ok and e12a_ok and e12b_ok
+    gate_pass = (e12a_ok and e12b_ok) if suffix else (e11_ok and e12a_ok and e12b_ok)
 
     review = {
         "e5_crossover": e5_rows,
@@ -206,7 +221,11 @@ def main() -> None:
         "gate6_pass": gate_pass,
         "n_tasks_completed": task_counts.get("completed", 0),
         "n_tasks_failed": task_counts.get("failed", 0),
-        "notes": f"E11={'OK' if e11_ok else 'FAIL'}, E12a={'OK' if e12a_ok else 'FAIL'}, E12b={'OK' if e12b_ok else 'FAIL'}.",
+        "notes": (
+            f"E12a={'OK' if e12a_ok else 'FAIL'}, E12b={'OK' if e12b_ok else 'FAIL'}."
+            if suffix else
+            f"E11={'OK' if e11_ok else 'FAIL'}, E12a={'OK' if e12a_ok else 'FAIL'}, E12b={'OK' if e12b_ok else 'FAIL'}."
+        ),
     }
     review_path = output_dir / "gate6_review.json"
     with open(review_path, "w") as fh:

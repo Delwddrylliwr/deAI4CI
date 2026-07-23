@@ -255,14 +255,21 @@ def main() -> None:
     parser.add_argument("--phase2-results", type=Path, default=Path("results/phase2"))
     parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase2"))
     parser.add_argument("--output-dir", type=Path, default=Path("review"))
+    parser.add_argument(
+        "--suffix", type=str, default="",
+        help="Suffix appended to NMH2/NMH6/NCP2 pkl dir names for the "
+             "synchronous variant (e.g. 'S' for phase 2s: NMH2S/NMH6S/NCP2S "
+             "-- see generate_queue.py's phase=='2s' branch).",
+    )
     args = parser.parse_args()
 
     results_dir = args.phase2_results
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    suffix = args.suffix
 
     # -- NMH-2: q_l(b) curve --
-    nmh2_pkl_dir = results_dir / "pkl" / "NMH2"
+    nmh2_pkl_dir = results_dir / "pkl" / f"NMH2{suffix}"
     q_l_data: Dict[float, Tuple[float, float, int]] = {}
     chi2 = float("nan")
     theta_fit = float("nan")
@@ -295,7 +302,7 @@ def main() -> None:
     rec_b = recommend_b_values_phase3(q_l_data, theta_fit, a_nmh2)
 
     # -- NMH-6: variance decomposition --
-    nmh6_pkl_dir = results_dir / "pkl" / "NMH6"
+    nmh6_pkl_dir = results_dir / "pkl" / f"NMH6{suffix}"
     decomp: Dict[int, Tuple[float, float, int]] = {}
     decomp_ok = False
     if nmh6_pkl_dir.exists():
@@ -314,7 +321,7 @@ def main() -> None:
         print(f"  [warn] {nmh6_pkl_dir} not found — skipping NMH-6")
 
     # -- NCP-2: directionality --
-    ncp2_pkl_dir = results_dir / "pkl" / "NCP2"
+    ncp2_pkl_dir = results_dir / "pkl" / f"NCP2{suffix}"
     p_out, p_in, n_out, n_in = float("nan"), float("nan"), 0, 0
     asymmetry_ratio = float("nan")
     if ncp2_pkl_dir.exists():

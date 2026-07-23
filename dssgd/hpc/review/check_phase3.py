@@ -234,14 +234,23 @@ def main() -> None:
     parser.add_argument("--phase3-results", type=Path, default=Path("results/phase3"))
     parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase3"))
     parser.add_argument("--output-dir", type=Path, default=Path("review"))
+    parser.add_argument(
+        "--suffix", type=str, default="",
+        help="Suffix appended to NMH5/NMH7/NCP3 pkl dir names for the "
+             "synchronous variant (e.g. 'S' for phase 3s: NMH5S/NMH7S/NCP3S "
+             "-- see generate_queue.py's phase=='3s' branch). The pilot dir "
+             "is a special case: generate_queue.py names it 'NMH4S_pilot' "
+             "(suffix inserted before '_pilot'), not 'NMH4_pilotS'.",
+    )
     args = parser.parse_args()
 
     results_dir = args.phase3_results
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    suffix = args.suffix
 
     # -- NMH-5: filter composition --
-    nmh5_pkl_dir = results_dir / "pkl" / "NMH5"
+    nmh5_pkl_dir = results_dir / "pkl" / f"NMH5{suffix}"
     filter_profile: Dict[Tuple[float, float], Tuple[float, float, int]] = {}
     filter_ok = False
     if nmh5_pkl_dir.exists():
@@ -257,7 +266,7 @@ def main() -> None:
         print(f"  [warn] {nmh5_pkl_dir} not found — skipping NMH-5")
 
     # -- NMH-7: detailed balance --
-    nmh7_pkl_dir = results_dir / "pkl" / "NMH7"
+    nmh7_pkl_dir = results_dir / "pkl" / f"NMH7{suffix}"
     balance: Dict[int, Tuple[float, int]] = {}
     balance_ok = False
     if nmh7_pkl_dir.exists():
@@ -275,7 +284,7 @@ def main() -> None:
         print(f"  [warn] {nmh7_pkl_dir} not found — skipping NMH-7")
 
     # -- NCP-3: decoupling profile --
-    ncp3_pkl_dir = results_dir / "pkl" / "NCP3"
+    ncp3_pkl_dir = results_dir / "pkl" / f"NCP3{suffix}"
     chi_matrix: Dict[Tuple[int, int], Tuple[float, float, int]] = {}
     decoupling_ok = False
     if ncp3_pkl_dir.exists():
@@ -292,7 +301,7 @@ def main() -> None:
         print(f"  [warn] {ncp3_pkl_dir} not found — skipping NCP-3")
 
     # -- NMH-4 pilot: power-law --
-    nmh4_pkl_dir = results_dir / "pkl" / "NMH4_pilot"
+    nmh4_pkl_dir = results_dir / "pkl" / f"NMH4{suffix}_pilot"
     tau, tau_se = float("nan"), float("nan")
     cascade_sizes: List[int] = []
     proceed_to_full = False

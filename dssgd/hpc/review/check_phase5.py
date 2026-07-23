@@ -196,14 +196,23 @@ def main() -> None:
     parser.add_argument("--phase5-results", type=Path, default=Path("results/phase5a"))
     parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase5a"))
     parser.add_argument("--output-dir", type=Path, default=Path("review"))
+    parser.add_argument(
+        "--suffix", type=str, default="",
+        help="Suffix appended to E7/E6/E1/E13 pkl dir names for the "
+             "synchronous variant (e.g. 'S' for phase 5s: E7S/E6S/E13S -- "
+             "see generate_queue.py's phase=='5s' branch). Phase 5s has no "
+             "synchronous variant of E1, so that dir simply won't be found "
+             "when --suffix is set (E1 isn't gate-critical).",
+    )
     args = parser.parse_args()
 
     results_dir = args.phase5_results
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    suffix = args.suffix
 
     # -- E7: fixation vs computed rho --
-    e7_pkl_dir = results_dir / "pkl" / "E7"
+    e7_pkl_dir = results_dir / "pkl" / f"E7{suffix}"
     e7_rows: List[Dict[str, Any]] = []
     e7_ok = False
     if e7_pkl_dir.exists():
@@ -216,7 +225,7 @@ def main() -> None:
         print(f"  [warn] {e7_pkl_dir} not found — skipping E7")
 
     # -- E6: level matching --
-    e6_pkl_dir = results_dir / "pkl" / "E6"
+    e6_pkl_dir = results_dir / "pkl" / f"E6{suffix}"
     e6_rows: List[Dict[str, Any]] = []
     e6_ok = False
     if e6_pkl_dir.exists():
@@ -229,7 +238,7 @@ def main() -> None:
         print(f"  [warn] {e6_pkl_dir} not found — skipping E6")
 
     # -- E1: provenance --
-    e1_pkl_dir = results_dir / "pkl" / "E1"
+    e1_pkl_dir = results_dir / "pkl" / f"E1{suffix}"
     e1_summary: Dict[str, Any] = {}
     if e1_pkl_dir.exists():
         e1_summary = compute_e1_provenance_summary(e1_pkl_dir)
@@ -242,7 +251,7 @@ def main() -> None:
         print(f"  [warn] {e1_pkl_dir} not found — skipping E1")
 
     # -- E13: containment boundary --
-    e13_pkl_dir = results_dir / "pkl" / "E13"
+    e13_pkl_dir = results_dir / "pkl" / f"E13{suffix}"
     e13_rows: List[Dict[str, Any]] = []
     if e13_pkl_dir.exists():
         e13_rows = compute_e13_containment(e13_pkl_dir)
