@@ -20,7 +20,7 @@ import torch
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AsynchronousGossip, GossipAveraging
+from dssgd.protocols.gossip import AsynchronousGossip, SynchronousPairwiseGossip
 from dssgd.topology.multilayer import MultiLayerTopology
 from dssgd.topology.static import NestedModularTopology
 
@@ -122,7 +122,10 @@ def run_clique_fixation_trial(config: CliqueFixationConfig) -> CliqueFixationRun
             rng=np.random.default_rng(config.seed + 42),
         )
     else:
-        protocol = GossipAveraging()
+        protocol = SynchronousPairwiseGossip(
+            alpha=config.gossip_alpha,
+            rng=np.random.default_rng(config.seed + 42),
+        )
 
     for round_idx in range(config.n_rounds):
         layer_graphs = ml_topo.step(round_idx)

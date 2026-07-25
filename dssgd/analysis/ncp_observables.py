@@ -23,7 +23,10 @@ def shell_modal_basin(
     theta_B: np.ndarray,
     epsilon: float = 0.2,
 ) -> Dict[int, str]:
-    """Modal basin ('A', 'B', or 'X') for each shell over the trajectory.
+    """Modal basin ('A', 'B', or 'X') for each shell over the trajectory: the
+    shell-level coarse-graining B_k underlying Proposition 5.3's stationary
+    factorisation (Sec. 5.3), analogous to the modal-basin variables B^(l)
+    of Sec. 4.2 on the NMH side.
 
     For each shell, computes basin_label at each round and returns the
     majority vote.  Ties are broken in favour of 'X', then 'A'.
@@ -52,7 +55,9 @@ def decoupling_chi(
     theta_B: np.ndarray,
     epsilon: float = 0.2,
 ) -> float:
-    """Fraction of time-steps where inner and outer shells disagree on basin.
+    """Fraction of time-steps where inner and outer shells disagree on basin:
+    the chi_k decoupling parameter of Proposition 5.3 (eq. 5.3), empirically
+    measured (NCP-3) rather than computed from the rate-competition formula.
 
     χ = P(basin(inner) ≠ basin(outer)), estimated empirically over T rounds.
     Higher χ indicates more decoupling between the two shells.
@@ -93,8 +98,9 @@ def conditional_mutual_information(
 ) -> float:
     """I(B_{shell_k} ; B_{shell_k2} | B_{shell_k1}) estimated empirically.
 
-    Tests Theorem 4 factorisation: conditional independence of non-adjacent
-    shells given intermediate shell.  Should be ≈ 0 under the Markov property.
+    Tests Proposition 5.3's conditional-Markov factorisation (eq. 5.2):
+    conditional independence of non-adjacent shells given the intermediate
+    shell (NCP-5). Should be ≈ 0 under the Markov property.
 
     Uses the identity I(X;Y|Z) = H(X,Z) + H(Y,Z) - H(X,Y,Z) - H(Z)
     with empirical histograms over T time steps.
@@ -162,7 +168,9 @@ def propagation_matrix(
     t_horizon: int,
     epsilon: float = 0.2,
 ) -> np.ndarray:
-    """Empirical shell-to-shell propagation probability matrix.
+    """Empirical shell-to-shell propagation probability matrix: the directional
+    reach bounds of Proposition 5.4 (eq. 5.4) -- outward (core-to-periphery)
+    expected to be far more efficient than inward, per Prop. 5.2's asymmetry.
 
     P[i, j] = fraction of runs (in shell_trajs list) where shell shell_list[j]
     is in basin B at t_horizon, conditioned on the i-th shell being the

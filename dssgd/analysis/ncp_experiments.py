@@ -11,9 +11,16 @@ NCP-5: Stationary distribution factorisation (conditional mutual information)
 
 gossip_protocol parameter (NCP-2 through NCP-5):
   "async_poisson"  — AsynchronousGossip (default; Phase xA)
-  "synchronous"    — GossipAveraging (Phase xS)
+  "synchronous"    — SynchronousPairwiseGossip: round-synchronous maximal-
+                     matching pairwise kicks (Remark 4.3's H-sched class),
+                     NOT GossipAveraging's simultaneous m-way mean (Phase xS)
   When "synchronous", the experiment name prefix gains an "S" suffix.
   NCP-1 is graph-only (no gossip) and has no gossip_protocol parameter.
+
+Theory references use paper1_PDMP_wDAG_wData.md's current numbering
+(Prop. 5.2/5.3/5.4 etc.), not the older timesep_NMH_NCP_experiment_spec.md
+draft numbering ("Theorem 4", "§3.5/§3.9", "Eq (30)-(39)") some docstrings
+below still carry over from that earlier draft.
 """
 
 from typing import List, Optional
@@ -37,6 +44,12 @@ def experiment_NCP1_graph_configs(
     n_instances: int = 20,
 ) -> List[NCPSimConfig]:
     """Minimal configs for NCP-1 graph-structure validation.
+
+    Tests the Sec. 5.1 shell/bridge structural facts (Annex A.4): k_max
+    non-trivial and growing (logarithmically) with N, increasing with p_f,
+    heavy-tailed shell sizes, and bridge counts B_{k,k+1} ~ |S_k|^gamma with
+    gamma < 1 (the bridge exponent check_phase1.py's compute_ncp1_bridge_
+    exponent fits).
 
     These configs are used only to instantiate ForestFireTopology and call
     shell_assignment(); the simulation loop is not run.  The n_meas_rounds=0
@@ -80,8 +93,8 @@ def experiment_NCP2(
 ) -> List[NCPSimConfig]:
     """Asymmetric nucleation: outward (core→periphery) vs inward (periphery→core).
 
-    Tests §3.5, Equations (30)-(32): outward nucleation probability
-    q^out_{k+1→k} >> q^in_{k→k+1}.
+    Tests Proposition 5.2 (eq. 5.1): outward nucleation probability
+    q^out_{k+1→k} >> q^in_{k→k+1}, with q^out/q^in ~ |S_{k+1}| at rho->1.
 
     Two scenario sets are generated:
     - Outward: clamp the innermost shell (highest k-core number) to B.
@@ -176,7 +189,7 @@ def experiment_NCP3(
 ) -> List[NCPSimConfig]:
     """Decoupling parameter χ_k profile across shells.
 
-    Tests Theorem 4, Equation (35): χ_k grows with shell outermost-ness.
+    Tests Proposition 5.3 (eq. 5.3): χ_k grows with shell outermost-ness.
     Free run (no clamped_shell); stationarity is reached by long n_meas.
     """
     prefix = "NCP3S" if gossip_protocol != "async_poisson" else "NCP3"
@@ -219,9 +232,11 @@ def experiment_NCP4(
 ) -> List[NCPSimConfig]:
     """Multi-layer cascade suppression: propagation matrix.
 
-    Tests §3.9, Equation (39): outermost-shell innovations reach innermost
-    core with probability ∏_k 1/|S_k|, super-exponentially small.
-    200 seeds per source-shell (callers set clamped_shell after graph inspection).
+    Tests Proposition 5.4 (eq. 5.4): outermost-shell innovations reach
+    innermost core with probability bounded by the inward product
+    ∏_k q_fix(1; |S_{k+1}|, rho), super-exponentially small for heavy-tailed
+    shell sizes. 200 seeds per source-shell (callers set clamped_shell after
+    graph inspection).
     """
     prefix = "NCP4S" if gossip_protocol != "async_poisson" else "NCP4"
     configs = []
@@ -263,8 +278,9 @@ def experiment_NCP5(
 ) -> List[NCPSimConfig]:
     """Factorisation test: I(B_k ; B_{k+2} | B_{k+1}) ≈ 0.
 
-    Tests Theorem 4, Equation (33).  Long n_meas=3000 for CMI estimation
-    accuracy.  Few seeds (10) since each run is long.
+    Tests Proposition 5.3 (eq. 5.2): the conditional-Markov stationary
+    factorisation. Long n_meas=3000 for CMI estimation accuracy. Few seeds
+    (10) since each run is long.
     """
     prefix = "NCP5S" if gossip_protocol != "async_poisson" else "NCP5"
     configs = []

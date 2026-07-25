@@ -36,6 +36,7 @@ from analysis.natural_cascade_experiments import (
     experiment_E4,
     experiment_E5,
     experiment_E6,
+    experiment_E6_positive_control,
     experiment_E11,
     experiment_E12a,
     experiment_E13,
@@ -76,8 +77,11 @@ _VALID_PHASES = {
 _INT_ALIAS = {1: "1a", 2: "2a", 3: "3a", 4: "4a", 5: "5a", 6: "6a", 7: "7a"}
 
 # Estimated wall-clock hours per task (used for duration-balanced shard assignment).
-# S-variant estimates are approximately 2× their A counterparts because
-# GossipAveraging updates all N agents every gradient step vs ~2.56 events for async.
+# S-variant estimates are approximately 2× their A counterparts, carried over from
+# when the synchronous branch used GossipAveraging (all-N-agent averaging per
+# gradient step); it now uses SynchronousPairwiseGossip (round-synchronous maximal
+# matching, comparable per-round cost to async's ~2.56 events) -- these estimates
+# have not been re-measured post-switch and may now overstate the S/A ratio.
 EXPERIMENT_HOURS: Dict[str, float] = {
     # Phase 1A / 2A / 3A / 4A
     "NMH1": 0.5,
@@ -539,6 +543,13 @@ def build_phase_tasks(
         for cfg in experiment_E6(seeds=_seeds(50)):
             tasks.append(_nc_task(cfg, "E6", phase, results_root))
 
+        # Positive control (assessment doc A.6): small/fast, same-bias variant
+        # verifying the containment/attainment pipeline detects d_max==G
+        # before any real E6/E12a null is trusted -- see check_phase6.py's
+        # e12a_ok scoring.
+        for cfg in experiment_E6_positive_control(seeds=_seeds(20)):
+            tasks.append(_nc_task(cfg, "E6ctrl", phase, results_root))
+
         for cfg in experiment_E7(seeds=_seeds(50)):
             tasks.append(_clique_task(cfg, "E7", phase, results_root))
 
@@ -555,6 +566,9 @@ def build_phase_tasks(
     elif phase == "5s":
         for cfg in experiment_E6(seeds=_seeds(50), gossip_protocol="synchronous"):
             tasks.append(_nc_task(cfg, "E6S", phase, results_root))
+
+        for cfg in experiment_E6_positive_control(seeds=_seeds(20), gossip_protocol="synchronous"):
+            tasks.append(_nc_task(cfg, "E6ctrlS", phase, results_root))
 
         for cfg in experiment_E7(seeds=_seeds(50), gossip_protocol="synchronous"):
             tasks.append(_clique_task(cfg, "E7S", phase, results_root))

@@ -22,7 +22,11 @@ import torch
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AsynchronousGossip, BoundedStalenessGossip, GossipAveraging
+from dssgd.protocols.gossip import (
+    AsynchronousGossip,
+    BoundedStalenessGossip,
+    SynchronousPairwiseGossip,
+)
 from dssgd.topology.base import Topology
 from dssgd.topology.multilayer import MultiLayerTopology
 from dssgd.topology.static import NestedModularTopology, OverlappingModularTopology
@@ -81,7 +85,16 @@ class NaturalCascadeConfig:
     epsilon: float = 0.2
     persistence: int = 3
     flip_noise_scale: float = 0.0   # Langevin noise std per gossip round; 0 = pure gossip cascade
-    force_flip_source: bool = False  # if True, force-flip one random leaf post-warmup (zero noise)
+    force_flip_source: bool = False  # if True, force-flip a leaf post-warmup (zero noise)
+    # Which leaf to force-flip when force_flip_source=True. None (default):
+    # pick uniformly at random -- correct for homogeneous-loss experiments
+    # (NMH-1/NMH-3/E11) where every leaf is equivalent. Experiments with a
+    # per-leaf heterogeneity model keyed to a specific origin (E6/E12a's
+    # per_leaf_loss_params_for_generality(source_leaf=...), Def. 4.3's
+    # generality level) MUST set this to that same leaf, or the force-flipped
+    # leaf and the leaf the bias pattern / scoring (cascade_depth's
+    # source_leaf) were built around silently diverge.
+    source_leaf: Optional[int] = None
     layer_name: str = "social"
     gossip_protocol: str = "async_poisson"   # "async_poisson" or "synchronous"
     gossip_rate: Optional[float] = None     # None → auto-set to n_agents (see runner)
@@ -327,7 +340,10 @@ def run_natural_cascade_simulation(
             staleness_bound=config.staleness_bound,
         )
     elif config.gossip_protocol == "synchronous":
-        protocol = GossipAveraging()
+        protocol = SynchronousPairwiseGossip(
+            alpha=config.gossip_alpha,
+            rng=np.random.default_rng(config.seed + 42),
+        )
     else:
         raise ValueError(
             f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
@@ -368,12 +384,18 @@ def run_natural_cascade_simulation(
     # Phase 2: measurement
     centroid_traj_list: List[np.ndarray] = []
 
-    # Optional force-flip: set one random leaf to basin B at t=0 so that the
-    # cascade propagation is driven purely by gossip (zero Langevin noise).
-    # The source leaf appears as nucleation_leaf with t_nucleation=0; all
-    # other flip times are relative to this forced starting point.
+    # Optional force-flip: set one leaf to basin B at t=0 so that the cascade
+    # propagation is driven purely by gossip (zero Langevin noise). The
+    # source leaf appears as nucleation_leaf with t_nucleation=0; all other
+    # flip times are relative to this forced starting point. config.source_leaf
+    # pins which leaf, for experiments whose per-leaf heterogeneity (and
+    # scoring) is keyed to a specific origin (E6/E12a); otherwise a leaf is
+    # chosen uniformly at random (NMH-1/NMH-3/E11: every leaf is equivalent).
     if config.force_flip_source:
-        source_leaf = int(np.random.randint(n_leaf_types))
+        source_leaf = (
+            config.source_leaf if config.source_leaf is not None
+            else int(np.random.randint(n_leaf_types))
+        )
         flip_target_t = theta_B_t if config.init_basin == "A" else theta_A_t
         force_flip_module(agents, assigns, source_leaf, flip_target_t, noise_scale=0.0)
 

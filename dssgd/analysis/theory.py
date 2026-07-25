@@ -425,8 +425,13 @@ def chord_geometry(a: float, b: float, delta_norm: float = 1.0, r: float = 1.0) 
 def fixation_bias(
     a: float, b: float, kick_weight: float, delta_norm: float = 1.0, r: float = 1.0,
 ) -> float:
-    """Birth-death bias rho = p_-/p_+ of Lemma 3.1, computed (not fitted)
-    from the loss geometry and a single fixed kick weight.
+    """Birth-death bias rho = p_-/p_+ of Lemma 3.1 (r=1.0, the default) or
+    of Lemma 10.1's curvature-ratio generalisation (r!=1, as E12b sweeps),
+    computed (not fitted) from the loss geometry and a single fixed kick
+    weight. r=1 is the equal-curvature family of Lemma 2.1 that Lemma 3.1
+    is stated for; r!=1 routes through chord_geometry's curvature_epsilon(r)
+    (Lemma 10.1 Sec. 10), so the returned rho is rho_curv(r)-flavoured, not
+    literally Lemma 3.1's rho_depth(lambda), whenever r!=1.
 
     This repo's kick-weight law mu_C is degenerate: AsynchronousGossip pulls
     with a single fixed mixing weight (`alpha`/`gossip_alpha`), not a

@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """Gate 1 review script: verify Phase 1 outputs before submitting Phase 2.
 
+Scores NMH-1 (Proposition 4.2 slope-1 first-passage scaling), NMH-3 (Sec. 4.5
+phase structure), and NCP-1 (Sec. 5.1 shell/bridge structural facts, Annex
+A.4) against paper1_PDMP_wDAG_wData.md.
+
 Produces:
   review/gate1_review.json   — machine-readable gate decision (input to generate_queue --phase 2)
   review/gate1_nmh1_slopes.csv
@@ -190,6 +194,52 @@ def compute_ncp1_shell_scaling(jsonl_paths: List[Path]) -> Dict[float, Dict[int,
     return result_dict
 
 
+def compute_ncp1_bridge_exponent(jsonl_paths: List[Path]) -> Tuple[float, float, int]:
+    """Fit the bridge exponent gamma (paper1_PDMP_wDAG_wData.md Sec. 5.1:
+    B_{k,k+1} ~ |S_k|^gamma) from NCP-1's shell_sizes/bridge_counts records.
+
+    Returns (gamma, r_squared, n_points) via OLS on log|S_k| vs log B_{k,k+1},
+    pooling every (shell, seed, p_f) observation. (nan, nan, 0) if too few points.
+    """
+    log_sizes: List[float] = []
+    log_bridges: List[float] = []
+    for path in jsonl_paths:
+        if not path.exists():
+            continue
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            task = rec.get("task", {})
+            if task.get("experiment") != "NCP1":
+                continue
+            result = rec.get("result", {})
+            shell_sizes = result.get("shell_sizes", {})
+            bridge_counts = result.get("bridge_counts", {})
+            for key, b_count in bridge_counts.items():
+                k_str, _ = key.split(",")
+                s_k = shell_sizes.get(k_str)
+                if s_k is None or s_k <= 0 or b_count <= 0:
+                    continue
+                log_sizes.append(math.log(s_k))
+                log_bridges.append(math.log(b_count))
+
+    if len(log_sizes) < 3:
+        return float("nan"), float("nan"), len(log_sizes)
+
+    x = np.array(log_sizes)
+    y = np.array(log_bridges)
+    gamma, _intercept, _se = _linear_fit(x, y)
+    pred = gamma * x + _intercept
+    ss_res = float(np.sum((y - pred) ** 2))
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    return gamma, r_squared, len(log_sizes)
+
+
 # ---------------------------------------------------------------------------
 # Task audit
 # ---------------------------------------------------------------------------
@@ -309,6 +359,13 @@ def main() -> None:
     else:
         print("  [warn] No NCP-1 JSONL data found")
 
+    # -- NCP-1 bridge exponent gamma (B_{k,k+1} ~ |S_k|^gamma, Sec. 5.1) --
+    ncp1_gamma, ncp1_gamma_r2, ncp1_gamma_n = compute_ncp1_bridge_exponent(jsonl_files)
+    if not math.isnan(ncp1_gamma):
+        print(f"NCP-1 bridge exponent: gamma={ncp1_gamma:.3f} (R^2={ncp1_gamma_r2:.3f}, n={ncp1_gamma_n})")
+    else:
+        print("  [warn] Not enough NCP-1 bridge-count data to fit gamma")
+
     # -- NMH-7 pilot warmup rate --
     nmh7_ok_rate: Optional[float] = None
     nmh7_runs = []
@@ -357,6 +414,8 @@ def main() -> None:
             f"p_f={pf}": {str(n): v for n, v in by_n.items()}
             for pf, by_n in ncp1_scaling.items()
         },
+        "ncp1_gamma_estimate": ncp1_gamma if not math.isnan(ncp1_gamma) else None,
+        "ncp1_gamma_r_squared": ncp1_gamma_r2 if not math.isnan(ncp1_gamma_r2) else None,
         "recommended_b_values": rec_b,
         "gate1_pass": gate_pass,
         "n_tasks_completed": task_counts.get("completed", 0),

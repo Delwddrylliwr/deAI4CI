@@ -57,7 +57,7 @@ def experiment_NMH1(
 ) -> List[NaturalCascadeConfig]:
     """Primary slope-1 test: log₂(T_flip(d)) linear in d with slope ≈ 1.
 
-    Tests Theorem 1: τ_mix^(l) = Θ(2^{l+1} / (ε·p·M_0·q_l)).
+    Tests Proposition 4.2 (eq. 4.3): T_fp^(l) = Θ(2^{l+1} / (ε·p·M_0·q_l)).
     Sweeps a across Regime I (all levels flip); 50 seeds for CI estimation.
 
     Uses force_flip_source=True (one random leaf set to B post-warmup) so
@@ -202,7 +202,11 @@ def experiment_NMH2(
 ) -> List[NaturalCascadeConfig]:
     """Nucleation probability q_l as function of basin bias b.
 
-    Tests Equation (14): q_l = (1 - e^{-2θ}) / (1 - e^{-2θ M_{l-1}}).
+    Tests Lemma 3.1's fixation formula (eq. 3.2) at j=1: q_l = q_fix(1;
+    M_{l-1}, rho) = (1 - rho) / (1 - rho^{M_{l-1}}), fit here in its
+    voter-functional-form guise q_l = (1-e^{-2θ})/(1-e^{-2θ*M_{l-1}}) with θ
+    a free parameter (Gate 2's ΔAIC criterion tests this functional form
+    against a pairwise-constant alternative -- see check_phase2.py).
     Sweeps b to vary the effective saddle shift θ_s and empirical q_l.
     100 seeds per b value (q_l is a frequency estimate needing large N).
     Natural nucleation (no force-flip): small Langevin noise enables escape
@@ -250,7 +254,8 @@ def experiment_NMH3(
 ) -> List[NaturalCascadeConfig]:
     """Phase structure test: ferromagnetic / Griffiths / paramagnetic regimes.
 
-    Tests §2.7 phase structure under force-flip cascade dynamics.
+    Tests Sec. 4.5's ordered/stratified/contained phase structure under
+    force-flip cascade dynamics.
     Observable: cascade depth d_max(a) and fraction f_L(a) reaching root.
 
     Predicted boundaries at p=2:
@@ -306,7 +311,9 @@ def experiment_NMH4(
 ) -> List[NaturalCascadeConfig]:
     """Cascade size distribution: P(size=s) ~ s^{-τ} in the Griffiths phase.
 
-    Tests Proposition 1, Equation (18).  Uses depth=7 (N=512) for range
+    Tests Proposition 4.7 (eq. 4.6): the quenched-vs-annealed exponent gap
+    tau_typ - tau_ann as the rare-region (Griffiths) signature.  Uses depth=7
+    (N=512) for range
     over at least 1.5 decades.  2000 seeds for power-law fitting (MLE).
     a=2 is in the middle of the Griffiths regime (0.5 ≤ a < 8 for p=2).
     Force-flip source so cascade size reflects gossip propagation, not nucleation.
@@ -354,7 +361,8 @@ def experiment_NMH5(
 ) -> List[NaturalCascadeConfig]:
     """Filter composition: propagation depth d_prop as function of b/a.
 
-    Tests Theorem 3, Equations (19)-(20).
+    Tests Theorem 4.5 (eq. 4.5): the level-matching filter's geometric gate
+    (vartheta <= max C) and soft persistence gate composing via Prop. 3.3.
     Observable: d_prop(b/a) increases monotonically (flatter basins propagate
     further) with a sharp threshold at the deepest level geometric filter.
     Force-flip source so propagation depth reflects gossip filter attenuation.
@@ -405,7 +413,10 @@ def experiment_NMH6(
 ) -> List[NaturalCascadeConfig]:
     """Stationary variance decomposition with heterogeneous per-leaf loss.
 
-    Tests Proposition 2, Equations (22)-(23): V_L = Σ_l V_l^between.
+    Tests Sec. 4.8's heuristic ANOVA identity V_L = Σ_l V_l^between (scaling
+    V_l^between ~ 2^{-(L-l)*zeta} is a Heuristic, exponent zeta parametric --
+    see nmh_observables.hierarchical_variance_decomposition for the
+    nested-ANOVA estimator check_phase2.py's nmh6_decomp_ok scores).
     Per-leaf b_i ~ N(b_base, b_spread²), clipped to [0.005, 0.035] to keep
     all leaves in genuine bistable regime (bistability limit ≈ 0.074 for a=1)
     with non-negligible B→A back-transitions.
@@ -690,6 +701,19 @@ def experiment_E6(
     max propagation depth d_max vs G (Theorem 4.5's level-matching filter).
     Use nmh_observables.cascade_depth(centroid_traj, source_leaf=source_leaf,
     ...) on the returned run to read off d_max, and check it equals G.
+
+    force_flip_source=True (matching NMH-3/E11's convention): Theorem 4.5 is
+    a claim about PROPAGATION (does an already-arisen innovation reach depth
+    G?), not about spontaneous origination. Under deterministic gradient
+    descent with lambda<1 (genuine bistability, per Lemma 2.1) and no peer
+    kicks available to an isolated source at t=0, the source leaf has no
+    mechanism to escape basin A on its own -- confirmed empirically: with
+    force_flip_source=False (the prior default here), the source never
+    nucleates at all (nucleation_leaf=None every seed), making d_max=0
+    universally and by construction, regardless of the generality/tree-loss
+    machinery under test. Force-flipping the source is exactly the "assume
+    the innovation has just occurred" initial condition NMH-1/NMH-3/E11 all
+    use to isolate propagation from origination.
     """
     branching = 2
     n_leaf_types = branching ** depth
@@ -705,9 +729,51 @@ def experiment_E6(
                 name=f"{prefix}/G={G}/seed={seed}",
                 branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=seed,
                 n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
-                a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=False,
-                gossip_protocol=gossip_protocol,
+                a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=True,
+                source_leaf=source_leaf, gossip_protocol=gossip_protocol,
             ))
+    return configs
+
+
+def experiment_E6_positive_control(
+    generality_levels: List[int] = (1, 2),
+    a: float = 0.5,
+    b_in: float = 0.042,
+    b_out: float = 0.042,
+    seeds: List[int] = tuple(range(20)),
+    depth: int = 3,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    source_leaf: int = 0,
+    gossip_protocol: str = "async_poisson",
+) -> List[NaturalCascadeConfig]:
+    """Positive control for E6/E12a's containment/attainment machinery
+    (Theorem 4.5), assessment doc A.6: a small, fast (depth=3 instead of the
+    production depth=5) variant of experiment_E6 at the SAME default bias, so
+    check_phase6.py/check_phase5.py can verify the generality-scoping +
+    force-flip + cascade_depth pipeline actually detects d_max==G before any
+    real E6/E12a null (d_max==0 for every G) is trusted. Uses the identical
+    mechanism as experiment_E6 (same per_leaf_loss_params_for_generality,
+    same force_flip_source=True/source_leaf targeting) -- this is a scale
+    reduction for cheap, frequent verification, not a different (easier)
+    physical regime; confirmed to give d_max==G reliably at these defaults
+    once source_leaf is correctly force-flipped (see natural_cascade.py's
+    source_leaf field and experiment_E6's docstring for why the pre-fix
+    version could never nucleate at all).
+    """
+    configs = experiment_E6(
+        generality_levels=list(generality_levels), a=a, b_in=b_in, b_out=b_out,
+        seeds=seeds, depth=depth, leaf_size=leaf_size, p=p, lr=lr,
+        local_steps=local_steps, n_warmup=n_warmup, n_meas=n_meas,
+        source_leaf=source_leaf, gossip_protocol=gossip_protocol,
+    )
+    prefix = "E6ctrlS" if gossip_protocol != "async_poisson" else "E6ctrl"
+    for cfg in configs:
+        cfg.name = cfg.name.replace("E6S/", f"{prefix}/").replace("E6/", f"{prefix}/")
     return configs
 
 
@@ -821,6 +887,14 @@ def experiment_E13(
     (leaf_size) to locate the containment boundary m*(Delta_in) predicted
     by Theorem 11.3 / Proposition 11.2. delta_in=1 is the tree (n_overlap
     irrelevant -- OverlappingModularTopology's OverlapInfo is empty).
+
+    force_flip_source=True/source_leaf pinned to `source_leaf` (same fix as
+    experiment_E6): this uses the same per_leaf_loss_params_for_generality
+    origin-keyed heterogeneity mechanism E6/E12a use, and without a forced
+    initial condition at the configured source leaf, the source has no
+    mechanism to spontaneously nucleate under deterministic gradient descent
+    (lambda<1) -- see experiment_E6's docstring for the confirmed failure
+    mode this avoids.
     """
     branching = 2
     n_leaf_types = branching ** depth
@@ -850,7 +924,8 @@ def experiment_E13(
                     name=f"{prefix}/delta_in={delta_in}/m={m}/seed={seed}",
                     branching=branching, depth=depth, leaf_size=m, p=p, seed=seed,
                     n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
-                    a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=False,
+                    a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=True,
+                    source_leaf=source_leaf,
                     overlap_level=overlap_level, delta_in=delta_in, n_overlap=n_overlap,
                     gossip_protocol=gossip_protocol,
                 ))
@@ -871,10 +946,11 @@ def experiment_NMH7(
 ) -> List[NaturalCascadeConfig]:
     """Detailed balance and Gibbs measure test.  Requires b=0 (symmetric).
 
-    Tests Theorem 2, Equations (15)-(17).  With b=0 both A and B are
-    equally stable; the system explores both basins ergodically over the
-    long measurement window.  Rate ratio R_l = rate(A→B) / rate(B→A)
-    should equal e^{2·β_eff·J_l} under Theorem 2.
+    Tests Proposition 4.6 (eq. 4.7), the symmetric reference case of Sec. 4.7's
+    stationary structure.  With b=0 both A and B are equally stable; the
+    system explores both basins ergodically over the long measurement window.
+    Rate ratio R_l = rate(A→B) / rate(B→A) should equal e^{2·β_eff·J_l} under
+    reversibility at this symmetric (lambda=0) point.
 
     n_meas=4000 (longer run) for accurate rate estimates.
     Smaller depth=4 to keep per-run cost manageable.

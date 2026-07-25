@@ -14,7 +14,6 @@ import numpy as np
 
 from .active_escape import basin_label, find_t_flip
 from .catchup import hierarchical_distance
-from . import theory
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +29,10 @@ def cascade_depth(
     epsilon: float = 0.2,
     persistence: int = 3,
 ) -> int:
-    """Highest hierarchical distance reached by any leaf that flips to B.
+    """Highest hierarchical distance reached by any leaf that flips to B:
+    the d_max of Theorem 4.5's level-matching filter (paper1_PDMP_wDAG_wData
+    .md Sec. 4.4), compared against a candidate innovation's generality level
+    G(b) (Def. 4.3) by E6/E12a's scoring.
 
     Parameters
     ----------
@@ -60,7 +62,9 @@ def fraction_reaching_level(
     epsilon: float = 0.2,
     persistence: int = 3,
 ) -> float:
-    """Fraction of leaves at hierarchical distance `target_level` that flip.
+    """Fraction of leaves at hierarchical distance `target_level` that flip:
+    the per-level attainment rate underlying Proposition 3.3's renewal
+    composition and NMH-5's filter-composition test (Theorem 4.5).
 
     Returns NaN if there are no leaves at that distance.
     """
@@ -171,7 +175,9 @@ def nucleation_prob_per_level(
     theta_B: np.ndarray,
     epsilon: float = 0.2,
 ) -> Dict[int, float]:
-    """Empirical per-level A→B nucleation rate inferred from centroid jumps.
+    """Empirical per-level A→B nucleation rate inferred from centroid jumps:
+    the q_l of Lemma 3.1's fixation formula / Proposition 4.2's per-level
+    nucleation probability, measured directly (NMH-2) rather than fitted.
 
     For each consecutive pair of rounds (t-1, t) and each leaf tau, detects
     if the leaf was in basin A at t-1 and B at t (a 'nucleation event').
@@ -225,14 +231,46 @@ def hierarchical_variance_decomposition(
     depth: int,
     t_range: Optional[Tuple[int, int]] = None,
 ) -> Dict[int, float]:
-    """Between-level variance V_ell averaged over a time window.
+    """Nested-ANOVA variance components across hierarchy levels (Sec. 4.8's
+    V_l^between, ANOVA identity V_L = sum_l V_l^between).
 
-    V_ell is the variance of level-ell super-module centroids averaged over
-    t_range rounds.  The decomposition follows:
-        V_ell = Var(level-ell module means) - Var(level-(ell-1) module means)
-    where level-0 module means are the leaf centroids themselves.
+    This is a proper nested (hierarchical) random-effects ANOVA decomposition,
+    NOT a difference of raw variances-of-means at successive grains. That
+    naive difference (curr_var - prev_var, this function's form before this
+    fix) is structurally, asymptotically negative regardless of the true
+    variance components: writing X_leaf = mu + sum_j alpha^(j) + eps, with
+    alpha^(j) ~ N(0, sigma_j^2) shared within a level-j module and eps the
+    private leaf residual, the true variance of a level-k module mean is
+        Var(mean_k) = sum_{j>k} sigma_j^2 + sum_{j<=k} sigma_j^2 / b^(k-j)
+    (b = branching): levels above k contribute their FULL variance (shared,
+    not averaged away within the module) while levels at/below k are averaged
+    over b^(k-j) i.i.d. draws. Differencing Var(mean_k) - Var(mean_{k-1}) makes
+    the sigma_k^2 term cancel exactly and leaves only a negative combination of
+    LOWER-level variances (-(b-1) * sum_{j<k} sigma_j^2/b^(k-j)) -- i.e. the old
+    formula could never recover sigma_k^2 at any sample size.
 
-    Returns {level: V_level} for level in 1..depth.
+    The correct estimator instead computes, at each level ell, the nested-ANOVA
+    mean square MS_ell = SS_ell / df_ell, where SS_ell is the sum of squared
+    deviations of level-(ell-1) module means from their level-ell parent's
+    mean (summed over all level-ell parents) and df_ell = n_{ell-1} - n_ell.
+    This has the exact expectation E[MS_ell] = sigma_{ell-1}^2 + E[MS_{ell-1}]/b
+    (standard balanced nested-ANOVA result), so the unbiased variance component
+    is recovered by the simple recursive subtraction
+        sigma_{ell-1}^2_hat = MS_ell - MS_{ell-1} / b,   MS_0 := 0.
+    This is exact (no bias) for any module/sample size, including the small
+    branching factors (b=2..4) used throughout this codebase, unlike the old
+    formula whose bias did not vanish even at large sample sizes.
+
+    Returns {level: sigma_{level-1}^2_hat} for level in 1..depth -- i.e. key 1
+    is the leaf-residual/private-noise component (sigma_0^2), key 2 is the
+    level-1-module component (sigma_1^2), ..., key `depth` is the
+    second-to-last, coarsest *estimable* component (sigma_{depth-1}^2). The
+    outermost/root-level component sigma_depth^2 is NOT included: a single
+    run has exactly one root, so there is nothing to compare it against within
+    one run (this is the rigorous version of the spec's informal "V_L is
+    trivially zero" note -- it is not zero, it is inestimable from one run,
+    and pooling multiple independent runs/seeds would be required to recover
+    it as an across-seed variance).
 
     Parameters
     ----------
@@ -246,34 +284,29 @@ def hierarchical_variance_decomposition(
     T, n_leaf_types, d_param = centroid_traj.shape
     t_start, t_end = t_range if t_range is not None else (0, T)
     traj = centroid_traj[t_start:t_end]   # (T', n_leaf_types, d_param)
-    T_window = traj.shape[0]
+    b = branching
 
-    # Get leaf groupings for each level
-    modules_by_level = theory.nmh_modules_by_level(branching, depth, leaf_size=1)
-    # modules_by_level[ell] = list of lists of LEAF indices in each level-ell module.
-    # We need to map these to indices into centroid_traj (which is indexed by leaf type).
+    # level_means[ell]: (n_modules_at_ell, d_param) time-averaged module means,
+    # for ell=0 (individual leaves) through ell=depth (root).
+    level_means: Dict[int, np.ndarray] = {0: traj.mean(axis=0)}  # (n_leaf_types, d_param)
+    for ell in range(1, depth + 1):
+        prev = level_means[ell - 1]
+        n_ell = prev.shape[0] // b
+        level_means[ell] = prev.reshape(n_ell, b, d_param).mean(axis=1)
 
-    # level 0: each leaf is its own module
-    # level ell: super-modules group branching^ell leaves contiguously
+    ms: Dict[int, float] = {0: 0.0}
+    for ell in range(1, depth + 1):
+        prev = level_means[ell - 1]              # (n_{ell-1}, d_param)
+        n_prev = prev.shape[0]
+        n_ell = n_prev // b
+        parent_broadcast = np.repeat(level_means[ell], b, axis=0)  # (n_{ell-1}, d_param)
+        ss = float(np.sum((prev - parent_broadcast) ** 2, axis=0).mean())  # sum over samples, mean over d_param
+        df = n_prev - n_ell
+        ms[ell] = ss / df if df > 0 else float("nan")
 
     result: Dict[int, float] = {}
-    # Compute module centroid variance at level 0 (leaf level)
-    prev_var = float(np.var(traj.mean(axis=0), axis=0).mean())  # mean over d_param dims
-
     for ell in range(1, depth + 1):
-        # Each level-ell module contains branching^ell leaf types
-        leaves_per_module = branching ** ell
-        n_modules = n_leaf_types // leaves_per_module
-        # Module centroid: mean over leaves within module, then over time
-        module_means = np.zeros((T_window, n_modules, d_param))
-        for m in range(n_modules):
-            start = m * leaves_per_module
-            end = (m + 1) * leaves_per_module
-            module_means[:, m, :] = traj[:, start:end, :].mean(axis=1)
-        # Variance across modules, averaged over time and d_param dims
-        curr_var = float(np.var(module_means.mean(axis=0), axis=0).mean())
-        result[ell] = curr_var - prev_var
-        prev_var = curr_var
+        result[ell] = ms[ell] - ms[ell - 1] / b if not math.isnan(ms[ell]) else float("nan")
 
     return result
 
@@ -290,7 +323,9 @@ def detailed_balance_ratio(
     theta_B: np.ndarray,
     epsilon: float = 0.2,
 ) -> Dict[int, float]:
-    """Empirical A→B rate / B→A rate per hierarchical distance from source.
+    """Empirical A→B rate / B→A rate per hierarchical distance from source:
+    the R_l of Theorem 2/Proposition 4.6's detailed-balance test
+    (R_l = e^{2*beta_eff*J_l} under reversibility at the symmetric b=0 point).
 
     Counts forward (A→B) and backward (B→A) transition events across all
     leaves at each distance d and all time steps.

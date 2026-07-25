@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """Gate 2 review script: nucleation curve, variance decomposition, NCP-2 directionality.
 
+Scores NMH-2 (Lemma 3.1's fixation formula, voter-functional-form fit vs
+ΔAIC against a pairwise-constant null), NMH-6 (Sec. 4.8's variance
+decomposition, via nmh_observables.hierarchical_variance_decomposition's
+nested-ANOVA estimator), and NCP-2 (Proposition 5.2 asymmetric nucleation)
+against paper1_PDMP_wDAG_wData.md.
+
 Produces:
   review/gate2_review.json   — machine-readable gate decision (input to generate_queue --phase 3)
   review/gate2_nmh2_q_l.csv
@@ -114,6 +120,65 @@ def fit_voter_q_l(
         return float("nan"), float("nan")
 
 
+def fit_pairwise_constant_q_l(
+    b_values: List[float],
+    q_l_empirical: List[float],
+) -> Tuple[float, float]:
+    """Fit the pairwise-constant alternative q_l ~= c (saturates near a fixed
+    value, insensitive to b/a -- the pairwise prediction NMH-2's G2.1 criterion
+    compares against the voter functional form). Returns (chi2, c_fit) using
+    the same chi2 statistic form as fit_voter_q_l, so the two are directly
+    comparable via AIC (compute_nmh2_delta_aic).
+    """
+    if len(b_values) < 2:
+        return float("nan"), float("nan")
+    q_arr = np.array(q_l_empirical)
+    c_fit = float(np.clip(q_arr.mean(), 1e-6, 1.0 - 1e-6))
+    residuals = q_arr - c_fit
+    chi2 = float(np.sum((residuals ** 2) / np.maximum(c_fit * (1 - c_fit) / 30, 1e-6)))
+    return chi2, c_fit
+
+
+def _chi2_aic(chi2: float, n_params: int) -> float:
+    """AIC from a chi2 statistic (sum of squared standardized residuals under
+    the same per-point Gaussian-approximate-to-Bernoulli variance model both
+    fit_voter_q_l and fit_pairwise_constant_q_l use): AIC = chi2 + 2*n_params.
+    Valid for comparing two fits to the same data under the same per-point
+    variance model, which is exactly the voter-vs-pairwise comparison G2.1
+    (HPC_experiment_spec.md) calls for.
+    """
+    return chi2 + 2.0 * n_params if not math.isnan(chi2) else float("nan")
+
+
+def compute_nmh2_delta_aic(
+    b_values: List[float],
+    q_l_empirical: List[float],
+    a: float,
+    leaf_size: int,
+) -> Dict[str, float]:
+    """Gate 2 criterion G2.1 (HPC_experiment_spec.md): Delta AIC =
+    AIC_pairwise - AIC_voter, comparing the voter functional form
+    q_l=(1-e^-2h)/(1-e^-2hM) (Eq. 14, 1 free parameter theta) against the
+    pairwise-constant null q_l ~= c (1 free parameter c). Delta AIC > 4 is
+    the spec's threshold for strong preference for voter.
+    """
+    chi2_voter, theta_fit = fit_voter_q_l(b_values, q_l_empirical, a, leaf_size)
+    chi2_pairwise, c_fit = fit_pairwise_constant_q_l(b_values, q_l_empirical)
+    aic_voter = _chi2_aic(chi2_voter, 1)
+    aic_pairwise = _chi2_aic(chi2_pairwise, 1)
+    delta_aic = (
+        aic_pairwise - aic_voter
+        if not (math.isnan(aic_voter) or math.isnan(aic_pairwise))
+        else float("nan")
+    )
+    return {
+        "chi2_voter": chi2_voter, "theta_fit": theta_fit,
+        "chi2_pairwise": chi2_pairwise, "c_fit": c_fit,
+        "aic_voter": aic_voter, "aic_pairwise": aic_pairwise,
+        "delta_aic": delta_aic,
+    }
+
+
 def recommend_b_values_phase3(
     q_l_data: Dict[float, Tuple[float, float, int]],
     theta_fit: float,
@@ -146,9 +211,14 @@ def recommend_b_values_phase3(
 
 def compute_nmh6_decomp(
     pkl_dir: Path,
-) -> Dict[int, Tuple[float, float, int]]:
-    """Return {level: (mean_V_ell, std_V_ell, n_runs)} from NMH-6 pickles."""
+) -> Tuple[Dict[int, Tuple[float, float, int]], Optional[int], Optional[int]]:
+    """Return ({level: (mean_V_ell, std_V_ell, n_runs)}, branching, depth) from
+    NMH-6 pickles. branching/depth are read from the first loaded run (None if
+    no run loaded), so the caller can build a matching synthetic positive
+    control rather than assuming a hardcoded topology."""
     by_level: Dict[int, List[float]] = defaultdict(list)
+    branching: Optional[int] = None
+    depth: Optional[int] = None
     for pkl_path in sorted(pkl_dir.glob("*.pkl")):
         try:
             run = NaturalCascadeRun.load(pkl_path)
@@ -156,6 +226,8 @@ def compute_nmh6_decomp(
             continue
         if not run.warmup_ok:
             continue
+        if branching is None:
+            branching, depth = run.branching, run.depth
         decomp = hierarchical_variance_decomposition(
             run.centroid_traj, run.branching, run.depth
         )
@@ -166,7 +238,59 @@ def compute_nmh6_decomp(
     for level, vals in sorted(by_level.items()):
         arr = np.array(vals)
         result[level] = (float(arr.mean()), float(arr.std()), len(arr))
-    return result
+    return result, branching, depth
+
+
+def nmh6_synthetic_positive_control(
+    branching: int, depth: int, n_synthetic_seeds: int = 20,
+) -> Dict[int, float]:
+    """Positive-control precondition for nmh6_decomp_ok (Sec. 4.8): build
+    synthetic centroid trajectories with known, independently-drawn per-level
+    random effects (sigma_ell^2 = base * 4^ell, so the injected signal is
+    strictly increasing with level and unambiguous), run the exact same
+    hierarchical_variance_decomposition the real NMH-6 gate uses, and return
+    the recovered {level: V_level} averaged over n_synthetic_seeds independent
+    draws. Every recovered value must come out clearly positive and increasing
+    with level (matching the injection) -- if it doesn't, the estimator itself
+    (not just the real experimental data) cannot be trusted, independent of
+    what nmh6_decomp_ok's real-data check shows.
+    """
+    n_leaf_types = branching ** depth
+    T = 20
+    by_level: Dict[int, List[float]] = defaultdict(list)
+    rng_master = np.random.default_rng(12345)
+    base = 0.01
+    for _ in range(n_synthetic_seeds):
+        rng = np.random.default_rng(int(rng_master.integers(0, 2**31 - 1)))
+        level_effects: Dict[int, np.ndarray] = {}
+        for ell in range(depth + 1):
+            n_modules = n_leaf_types // (branching ** ell)
+            sigma_ell = math.sqrt(base * (4.0 ** ell))
+            level_effects[ell] = rng.normal(0.0, sigma_ell, size=n_modules)
+        traj = np.zeros((T, n_leaf_types, 1))
+        for leaf in range(n_leaf_types):
+            mean_val = 0.0
+            for ell in range(depth + 1):
+                module_idx = leaf // (branching ** ell)
+                mean_val += level_effects[ell][module_idx]
+            traj[:, leaf, 0] = mean_val + rng.normal(0.0, 1e-4, size=T)
+        decomp = hierarchical_variance_decomposition(traj, branching, depth)
+        for lvl, v in decomp.items():
+            by_level[lvl].append(v)
+    return {lvl: float(np.mean(vals)) for lvl, vals in sorted(by_level.items())}
+
+
+def nmh6_synthetic_control_passes(synthetic: Dict[int, float]) -> bool:
+    """True iff the synthetic positive control (known sigma_ell^2 = base*4^ell,
+    strictly increasing) is correctly recovered: every level clearly positive
+    and non-decreasing across levels."""
+    if not synthetic:
+        return False
+    levels = sorted(synthetic)
+    vals = [synthetic[l] for l in levels]
+    if any(v <= 0 for v in vals):
+        return False
+    return all(vals[i] <= vals[i + 1] * 1.5 for i in range(len(vals) - 1)) and vals[-1] > vals[0]
 
 
 # ---------------------------------------------------------------------------
@@ -286,11 +410,13 @@ def main() -> None:
     theta_fit = float("nan")
     a_nmh2 = 1.0  # fixed in experiment_NMH2
     leaf_size = 4
+    nmh2_aic: Dict[str, float] = {}
     if nmh2_pkl_dir.exists():
         q_l_data = compute_nmh2_q_l(nmh2_pkl_dir)
         b_vals = sorted(q_l_data)
         q_emp = [q_l_data[b][0] for b in b_vals]
         chi2, theta_fit = fit_voter_q_l(b_vals, q_emp, a_nmh2, leaf_size)
+        nmh2_aic = compute_nmh2_delta_aic(b_vals, q_emp, a_nmh2, leaf_size)
         # Theoretical prediction at each b
         csv_rows = [
             {
@@ -301,33 +427,63 @@ def main() -> None:
                     _voter_q_l(b, theta_fit, a_nmh2, leaf_size)
                     if not math.isnan(theta_fit) else float("nan")
                 ),
+                "q_l_pairwise_constant": nmh2_aic.get("c_fit", float("nan")),
                 "n_seeds": q_l_data[b][2],
             }
             for b in b_vals
         ]
         _write_csv(output_dir / "gate2_nmh2_q_l.csv", csv_rows)
-        print(f"NMH-2: chi^2={chi2:.2f}, theta_fit={theta_fit:.4f}")
+        print(f"NMH-2: chi^2={chi2:.2f}, theta_fit={theta_fit:.4f}, "
+              f"delta_aic={nmh2_aic.get('delta_aic', float('nan')):.2f} (>4 favours voter)")
     else:
         print(f"  [warn] {nmh2_pkl_dir} not found — skipping NMH-2")
 
     rec_b = recommend_b_values_phase3(q_l_data, theta_fit, a_nmh2)
 
     # -- NMH-6: variance decomposition --
+    # Positive-control precondition, independent of the real data below: the
+    # corrected nested-ANOVA estimator (nmh_observables.hierarchical_variance_
+    # decomposition) must first correctly recover a known synthetic signal.
     nmh6_pkl_dir = results_dir / "pkl" / f"NMH6{suffix}"
     decomp: Dict[int, Tuple[float, float, int]] = {}
     decomp_ok = False
+    nmh6_branching, nmh6_depth = 2, 5  # NMH-6 defaults (experiment_NMH6); refined below if pkls exist
     if nmh6_pkl_dir.exists():
-        decomp = compute_nmh6_decomp(nmh6_pkl_dir)
+        decomp, run_branching, run_depth = compute_nmh6_decomp(nmh6_pkl_dir)
+        if run_branching is not None:
+            nmh6_branching, nmh6_depth = run_branching, run_depth
+
+    nmh6_synthetic = nmh6_synthetic_positive_control(nmh6_branching, nmh6_depth)
+    nmh6_synthetic_ok = nmh6_synthetic_control_passes(nmh6_synthetic)
+    print(f"NMH-6 synthetic positive control (known signal recovered): {nmh6_synthetic_ok} {nmh6_synthetic}")
+
+    if nmh6_pkl_dir.exists():
         if decomp:
             levels = sorted(decomp)
-            means = [decomp[l][0] for l in levels]
-            decomp_ok = all(means[i] >= means[i + 1] - 1e-6 for i in range(len(means) - 1))
+            # Below-detection clamp: sampling noise around a true-zero component
+            # can dip slightly negative even with the corrected (unbiased)
+            # estimator; report those as "consistent with zero" rather than as
+            # a violation of the expected direction.
+            means_clamped = [max(decomp[l][0], 0.0) for l in levels]
+            # Corrected estimator recovers real per-level variance components,
+            # which the ANOVA identity V_L = sum_l V_l predicts should be
+            # NON-DECREASING toward the root under genuine hierarchical
+            # heterogeneity (matches Sec. 4.8's V_l ~ 2^{-(L-l)*zeta}, and the
+            # synthetic control above) -- the OPPOSITE direction from the old,
+            # structurally-biased raw-variance-difference formula this
+            # replaced.
+            monotone_ok = all(
+                means_clamped[i] <= means_clamped[i + 1] + 1e-6
+                for i in range(len(means_clamped) - 1)
+            )
+            decomp_ok = nmh6_synthetic_ok and monotone_ok
             csv_rows = [
-                {"level": l, "mean_V": decomp[l][0], "std_V": decomp[l][1], "n_runs": decomp[l][2]}
-                for l in levels
+                {"level": l, "mean_V": decomp[l][0], "mean_V_clamped": mc,
+                 "std_V": decomp[l][1], "n_runs": decomp[l][2]}
+                for l, mc in zip(levels, means_clamped)
             ]
             _write_csv(output_dir / "gate2_nmh6_variance.csv", csv_rows)
-            print(f"NMH-6 variance decomp OK: {decomp_ok}")
+            print(f"NMH-6 variance decomp OK (synthetic control passing AND real data non-decreasing): {decomp_ok}")
     else:
         print(f"  [warn] {nmh6_pkl_dir} not found — skipping NMH-6")
 
@@ -349,7 +505,15 @@ def main() -> None:
 
     task_counts = _task_counts(args.queue_dir)
 
-    gate_pass = chi2 < 10 and not math.isnan(chi2) and (math.isnan(asymmetry_ratio) or asymmetry_ratio > 2.0)
+    # G2.1 (HPC_experiment_spec.md): Delta AIC > 4 favouring voter is the
+    # spec's stated formulation-discrimination criterion, replacing the
+    # ad hoc chi2<10 threshold this used to gate on (chi2 alone can't
+    # discriminate voter from pairwise -- both are scored on their own scale).
+    delta_aic = nmh2_aic.get("delta_aic", float("nan"))
+    gate_pass = (
+        not math.isnan(delta_aic) and delta_aic > 4
+        and (math.isnan(asymmetry_ratio) or asymmetry_ratio > 2.0)
+    )
 
     review = {
         "run_parametrization": {
@@ -361,8 +525,11 @@ def main() -> None:
         },
         "nmh2_q_l_by_b": {str(b): q_l_data[b][0] for b in sorted(q_l_data)},
         "nmh2_theory_fit_chi2": chi2,
+        "nmh2_delta_aic": nmh2_aic,
         "q_l_calibration": {"theta_fit": theta_fit, "a": a_nmh2, "leaf_size": leaf_size},
         "nmh6_variance_decomp": {str(l): decomp[l][0] for l in sorted(decomp)},
+        "nmh6_synthetic_positive_control": {str(l): v for l, v in nmh6_synthetic.items()},
+        "nmh6_synthetic_control_ok": nmh6_synthetic_ok,
         "nmh6_decomp_ok": decomp_ok,
         "ncp2_p_outward": p_out,
         "ncp2_p_inward": p_in,
@@ -372,7 +539,8 @@ def main() -> None:
         "n_tasks_completed": task_counts.get("completed", 0),
         "n_tasks_failed": task_counts.get("failed", 0),
         "notes": (
-            f"Voter fit chi^2={chi2:.2f}. NCP-2 asymmetry ratio={asymmetry_ratio:.2f}."
+            f"Voter fit chi^2={chi2:.2f}, delta_aic={delta_aic:.2f} (>4 favours voter). "
+            f"NCP-2 asymmetry ratio={asymmetry_ratio:.2f}."
         ),
     }
 

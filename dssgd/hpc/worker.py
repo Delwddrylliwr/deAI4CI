@@ -50,7 +50,11 @@ from analysis.ncp_runner import NCPRun, compute_shell_trajs
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AsynchronousGossip, BoundedStalenessGossip, GossipAveraging
+from dssgd.protocols.gossip import (
+    AsynchronousGossip,
+    BoundedStalenessGossip,
+    SynchronousPairwiseGossip,
+)
 from dssgd.topology.base import Topology
 from dssgd.topology.forest_fire import ForestFireTopology
 from dssgd.topology.multilayer import MultiLayerTopology
@@ -287,7 +291,10 @@ class CheckpointableRunner:
                 rng=np.random.default_rng(config.seed + 42), staleness_bound=config.staleness_bound,
             )
         elif config.gossip_protocol == "synchronous":
-            protocol = GossipAveraging()
+            protocol = SynchronousPairwiseGossip(
+                alpha=config.gossip_alpha,
+                rng=np.random.default_rng(config.seed + 42),
+            )
         else:
             raise ValueError(
                 f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
@@ -529,7 +536,10 @@ class CheckpointableRunner:
                 rng=np.random.default_rng(config.seed + 42),
             )
         else:
-            protocol = GossipAveraging()
+            protocol = SynchronousPairwiseGossip(
+                alpha=config.gossip_alpha,
+                rng=np.random.default_rng(config.seed + 42),
+            )
 
         # Warmup
         for round_idx in range(config.n_warmup):
@@ -748,7 +758,13 @@ def _restore_agent_params_ncp(
 
 
 def run_ncp1_graph_only(task: Dict[str, Any]) -> Dict[str, Any]:
-    """Instantiate ForestFireTopology and return shell structure stats."""
+    """Instantiate ForestFireTopology and return shell structure stats.
+
+    paper1_PDMP_wDAG_wData.md Sec. 5.1 / Annex A.4: shell decomposition and
+    inter-shell bridge counts B_{k,k+1}, which check_phase1.py fits to
+    B_{k,k+1} ~ |S_k|^gamma to recover the bridge exponent gamma feeding
+    NCP-2's node-count choice (Sec. 5.1, Assumption P).
+    """
     cfg = dict_to_ncp_config(task["config"])
     topo = ForestFireTopology(n=cfg.n_nodes, p_f=cfg.p_f, r=cfg.r, seed=cfg.seed,
                                ensure_connected=True)
@@ -759,6 +775,14 @@ def run_ncp1_graph_only(task: Dict[str, Any]) -> Dict[str, Any]:
     shell_sizes = {}
     for sh in set(shell_vals):
         shell_sizes[str(sh)] = shell_vals.count(sh)
+    # Bridge counts B_{k,k+1}: edges crossing exactly one shell boundary.
+    bridge_counts: Dict[str, int] = {}
+    for u, v in G.edges():
+        su, sv = shells[u], shells[v]
+        if abs(su - sv) == 1:
+            k = min(su, sv)
+            key = f"{k},{k + 1}"
+            bridge_counts[key] = bridge_counts.get(key, 0) + 1
     return {
         "n_nodes": cfg.n_nodes,
         "p_f": cfg.p_f,
@@ -768,6 +792,7 @@ def run_ncp1_graph_only(task: Dict[str, Any]) -> Dict[str, Any]:
         "min_shell": min(shell_vals),
         "mean_degree": float(np.mean(degrees)),
         "shell_sizes": shell_sizes,
+        "bridge_counts": bridge_counts,
     }
 
 

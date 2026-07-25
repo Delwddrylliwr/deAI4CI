@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """Gate 6 review script: validate Phase 6 (E5, E11, E12a, E12b) outputs.
 
+Scores E5 (Sec. 3.4 crossover stage l_c), E11 (Remark 4.3's scheduling
+dependence of the mixing exponent), E12a (Proposition 4.9 / Theorem 4.5's
+level-matching filter, gated on the E6ctrl positive control -- see
+natural_cascade_experiments.experiment_E6_positive_control), and E12b
+(Lemma 10.1's curvature ratchet, gated on the r=1 neutral-point control)
+against paper1_PDMP_wDAG_wData.md.
+
 Produces:
   review/gate6_review.json
   review/gate6_e11_slopes.csv
@@ -19,9 +26,15 @@ import math
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+try:
+    from scipy.stats import binomtest
+    _SCIPY = True
+except ImportError:
+    _SCIPY = False
 
 _HERE = Path(__file__).parent.parent.parent
 if str(_HERE) not in sys.path:
@@ -127,6 +140,39 @@ def compute_e12b_curvature_table(pkl_dir: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def r1_neutral_point_consistent(k: int, n: int, m: int, alpha: float = 0.05) -> Optional[bool]:
+    """Positive-control precondition for e12b_ok (Lemma 3.1's parameter-free
+    point): at r=1 (symmetric well) a single seed fixes at rate exactly 1/m
+    (the fair-random-walk case q_fix(1;m,1)=1/m). This is the one E12b cell
+    with no free/computed parameter to get wrong, so the r=1 row must itself
+    be statistically consistent with 1/m before any r>1 monotonicity claim is
+    trustworthy -- otherwise an all-zero row (predicted_q_fix indistinguishable
+    from observed only because both are ~0) trivially satisfies monotonicity
+    without the mechanism actually being observed to work at all.
+
+    Returns True/False from a two-sided binomial test against p=1/m, or None
+    if scipy is unavailable (in which case the precondition cannot be checked
+    and callers should treat it as failing open, i.e. not satisfied).
+    """
+    if not _SCIPY or n == 0:
+        return None
+    result = binomtest(k, n, p=1.0 / m, alternative="two-sided")
+    return result.pvalue > alpha
+
+
+def compute_e12b_r1_controls(rows: List[Dict[str, Any]]) -> Dict[int, Optional[bool]]:
+    """{m: r=1 neutral-point consistency} for every m present at r=1.0."""
+    result: Dict[int, Optional[bool]] = {}
+    for row in rows:
+        if row["r"] != 1.0:
+            continue
+        m = row["m"]
+        n = row["n_trials"]
+        k = int(round(row["empirical_fixation_on_sharp_freq"] * n))
+        result[m] = r1_neutral_point_consistent(k, n, m)
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gate 6 review for Phase 6 outputs (E5,E11,E12a,E12b).")
     parser.add_argument("--phase6-results", type=Path, default=Path("results/phase6a"))
@@ -180,6 +226,24 @@ def main() -> None:
         else:
             print(f"  [warn] {e11_pkl_dir} not found — skipping E11")
 
+    # Positive control (assessment doc A.6): E6ctrl/E6ctrlS are a small, fast,
+    # same-bias variant of E6 verifying the containment/attainment pipeline
+    # (per_leaf_loss_params_for_generality + force-flip targeting +
+    # cascade_depth) can detect d_max==G at all. Required precondition for
+    # e12a_ok -- without it, a real d_max==0-for-every-G null is
+    # indistinguishable from a broken pipeline (exactly what happened before
+    # the force_flip_source/source_leaf fix: see natural_cascade_experiments.
+    # experiment_E6's docstring).
+    e12a_ctrl_pkl_dir = results_dir / "pkl" / f"E6ctrl{suffix}"
+    e12a_ctrl_ok = False
+    if e12a_ctrl_pkl_dir.exists():
+        ctrl_rows = compute_e6_level_matching(e12a_ctrl_pkl_dir)
+        ctrl_fracs = [r["frac_d_max_eq_G"] for r in ctrl_rows]
+        e12a_ctrl_ok = bool(ctrl_fracs) and float(np.mean(ctrl_fracs)) > 0.7
+        print(f"E12a positive control (should detect d_max==G): mean frac={np.mean(ctrl_fracs) if ctrl_fracs else float('nan'):.3f}, ok={e12a_ctrl_ok}")
+    else:
+        print(f"  [warn] {e12a_ctrl_pkl_dir} not found — E12a positive control cannot run, e12a_ok forced False")
+
     e12a_pkl_dir = results_dir / "pkl" / f"E12a{suffix}"
     e12a_rows: List[Dict[str, Any]] = []
     e12a_ok = False
@@ -187,7 +251,7 @@ def main() -> None:
         e12a_rows = compute_e6_level_matching(e12a_pkl_dir)
         _write_csv(output_dir / "gate6_e12a_containment.csv", e12a_rows)
         fracs = [r["frac_d_max_eq_G"] for r in e12a_rows]
-        e12a_ok = bool(fracs) and float(np.mean(fracs)) > 0.5
+        e12a_ok = e12a_ctrl_ok and bool(fracs) and float(np.mean(fracs)) > 0.5
         print(f"E12a overfitting containment: mean frac(d_max==l)={np.mean(fracs) if fracs else float('nan'):.3f}")
     else:
         print(f"  [warn] {e12a_pkl_dir} not found — skipping E12a")
@@ -195,6 +259,7 @@ def main() -> None:
     e12b_pkl_dir = results_dir / "pkl" / f"E12b{suffix}"
     e12b_rows: List[Dict[str, Any]] = []
     e12b_ok = False
+    e12b_r1_controls: Dict[int, Optional[bool]] = {}
     if e12b_pkl_dir.exists():
         e12b_rows = compute_e12b_curvature_table(e12b_pkl_dir)
         _write_csv(output_dir / "gate6_e12b_curvature.csv", e12b_rows)
@@ -208,8 +273,15 @@ def main() -> None:
             items.sort()
             freqs = [f for _, f in items]
             monotone_ok.append(all(freqs[i] >= freqs[i + 1] - 0.15 for i in range(len(freqs) - 1)))
-        e12b_ok = bool(monotone_ok) and all(monotone_ok)
-        print(f"E12b curvature ratchet monotone-decreasing-in-r: {e12b_ok}")
+        # Positive-control precondition (Lemma 3.1's parameter-free r=1 point,
+        # q_fix(1;m,1)=1/m): monotonicity alone is satisfiable by an all-zero
+        # row, so require every m's r=1 cell to be statistically consistent
+        # with the neutral prediction before trusting the monotonicity check.
+        e12b_r1_controls = compute_e12b_r1_controls(e12b_rows)
+        r1_ok = bool(e12b_r1_controls) and all(v is True for v in e12b_r1_controls.values())
+        e12b_ok = bool(monotone_ok) and all(monotone_ok) and r1_ok
+        print(f"E12b r=1 neutral-point controls: {e12b_r1_controls}")
+        print(f"E12b curvature ratchet monotone-decreasing-in-r AND r=1 control passing: {e12b_ok}")
     else:
         print(f"  [warn] {e12b_pkl_dir} not found — skipping E12b")
 
@@ -227,9 +299,11 @@ def main() -> None:
         "e5_crossover": e5_rows,
         "e11_slopes": e11_rows,
         "e11_ok": e11_ok,
+        "e12a_positive_control_ok": e12a_ctrl_ok,
         "e12a_containment": e12a_rows,
         "e12a_ok": e12a_ok,
         "e12b_curvature": e12b_rows,
+        "e12b_r1_neutral_point_controls": {str(m): v for m, v in e12b_r1_controls.items()},
         "e12b_ok": e12b_ok,
         "gate6_pass": gate_pass,
         "n_tasks_completed": task_counts.get("completed", 0),

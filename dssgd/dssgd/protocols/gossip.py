@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
+import networkx as nx
 import numpy as np
 
 from ..nodes.agent import Agent
@@ -236,6 +237,63 @@ class BoundedStalenessGossip(AsynchronousGossip):
                 comm_round,
                 {initiator.id: self_state, sender_id: sender_state},
                 {initiator.id: 1.0 - self.alpha, sender_id: self.alpha},
+            )
+
+
+class SynchronousPairwiseGossip(Protocol):
+    """Round-synchronous scheduling of pairwise kicks (Remark 4.3's H-sched class,
+    paper1_PDMP_wDAG_wData.md Section 4.2/Annex D.1: "Round-synchronous scheduling
+    (all edges, or a maximal matching, per round, with full relaxation between
+    rounds) enforces [single-seed resolution] by construction").
+
+    Unlike GossipAveraging (a simultaneous m-way mean over each agent's whole
+    neighbourhood), this computes a maximal matching over the round's graph and
+    applies, per matched pair, the *same* one-sided pairwise kick AsynchronousGossip
+    uses -- so the scheduling axis (synchronous round-matching vs. free asynchrony)
+    is isolated from the update-rule axis (pairwise kick vs. m-way average), which
+    Remark 4.3's H-sched hypothesis and Proposition D.3.2's scheduling parameter
+    sigma_sched are specifically about. All matched pairs read from a pre-round
+    snapshot, so the round is genuinely simultaneous; unmatched agents are
+    untouched this round (at most one kick per agent per round, as under a
+    maximal matching).
+
+    Parameters
+    ----------
+    alpha : float
+        Initiator mixing weight toward the neighbour, matching
+        AsynchronousGossip's `alpha` (default 0.5: symmetric pairwise average
+        on the initiator side).
+    rng : np.random.Generator | None
+        Seeded RNG for reproducibility (used only to pick, per matched pair,
+        which endpoint is the initiator); a fresh generator is created if None.
+    """
+
+    def __init__(self, alpha: float = 0.5, rng: Optional[np.random.Generator] = None):
+        self.alpha = alpha
+        self._rng = rng if rng is not None else np.random.default_rng()
+
+    @property
+    def rng(self) -> np.random.Generator:
+        return self._rng
+
+    def execute(self, comm_round: CommunicationRound, agents: List[Agent]):
+        all_states = {
+            a.id: a.get_state(comm_round.state_keys, comm_round.param_mask)
+            for a in agents
+        }
+        agent_map = {a.id: a for a in agents}
+        matching = nx.maximal_matching(comm_round.graph)
+
+        for u, v in matching:
+            if self._rng.random() < 0.5:
+                initiator_id, sender_id = u, v
+            else:
+                initiator_id, sender_id = v, u
+            initiator = agent_map[initiator_id]
+            initiator.aggregate(
+                comm_round,
+                {initiator_id: all_states[initiator_id], sender_id: all_states[sender_id]},
+                {initiator_id: 1.0 - self.alpha, sender_id: self.alpha},
             )
 
 

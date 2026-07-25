@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AsynchronousGossip, GossipAveraging
+from dssgd.protocols.gossip import AsynchronousGossip, SynchronousPairwiseGossip
 from dssgd.topology.forest_fire import ForestFireTopology
 from dssgd.topology.multilayer import MultiLayerTopology
 
@@ -100,6 +100,11 @@ class NCPRun:
     t_nucleation: Optional[int]
     flip_table: List[dict]             # per-node flip info
     graph_stats: dict
+    # NCP-2 (Prop. 5.2): which shell was held at B throughout measurement,
+    # None for a free (unclamped) run. Read by compute_ncp2_directionality
+    # to classify a run as an outward (clamped == max_shell) or inward
+    # (clamped == min shell) directionality trial.
+    clamped_shell: Optional[int] = None
 
     def save(self, path: Union[str, Path]) -> None:
         p_obj = Path(path)
@@ -226,7 +231,10 @@ def run_ncp_simulation(config: NCPSimConfig) -> NCPRun:
             rng=np.random.default_rng(config.seed + 42),
         )
     else:
-        protocol = GossipAveraging()
+        protocol = SynchronousPairwiseGossip(
+            alpha=config.gossip_alpha,
+            rng=np.random.default_rng(config.seed + 42),
+        )
 
     # Phase 1: warmup
     for round_idx in range(config.n_warmup):
@@ -325,6 +333,7 @@ def run_ncp_simulation(config: NCPSimConfig) -> NCPRun:
         t_nucleation=t_nucleation,
         flip_table=flip_table,
         graph_stats=graph_stats,
+        clamped_shell=config.clamped_shell,
     )
 
 
