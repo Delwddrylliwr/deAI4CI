@@ -217,6 +217,13 @@ def main() -> None:
     gate_pass = (e12a_ok and e12b_ok) if suffix else (e11_ok and e12a_ok and e12b_ok)
 
     review = {
+        "run_parametrization": {
+            "phase6_results": str(results_dir),
+            "queue_dir": str(args.queue_dir),
+            "suffix": suffix,
+            "gossip_protocol": "synchronous" if suffix else "asynchronous",
+            "output_dir": str(output_dir),
+        },
         "e5_crossover": e5_rows,
         "e11_slopes": e11_rows,
         "e11_ok": e11_ok,

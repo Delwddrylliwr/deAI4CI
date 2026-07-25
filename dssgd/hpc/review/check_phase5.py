@@ -270,6 +270,13 @@ def main() -> None:
     gate_pass = e7_ok and e6_ok
 
     review = {
+        "run_parametrization": {
+            "phase5_results": str(results_dir),
+            "queue_dir": str(args.queue_dir),
+            "suffix": suffix,
+            "gossip_protocol": "synchronous" if suffix else "asynchronous",
+            "output_dir": str(output_dir),
+        },
         "e7_fixation_table": e7_rows,
         "e7_ok": e7_ok,
         "e6_level_matching": e6_rows,

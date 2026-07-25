@@ -347,6 +347,13 @@ def main() -> None:
         depth_note = "depth=6"
 
     review = {
+        "run_parametrization": {
+            "phase3_results": str(results_dir),
+            "queue_dir": str(args.queue_dir),
+            "suffix": suffix,
+            "gossip_protocol": "synchronous" if suffix else "asynchronous",
+            "output_dir": str(output_dir),
+        },
         "nmh5_filter_confirmed": filter_ok,
         "nmh5_d_prop_by_a_b_over_a": {
             f"a={a}_bova={b_on_a}": m

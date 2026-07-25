@@ -352,6 +352,13 @@ def main() -> None:
     gate_pass = chi2 < 10 and not math.isnan(chi2) and (math.isnan(asymmetry_ratio) or asymmetry_ratio > 2.0)
 
     review = {
+        "run_parametrization": {
+            "phase2_results": str(results_dir),
+            "queue_dir": str(args.queue_dir),
+            "suffix": suffix,
+            "gossip_protocol": "synchronous" if suffix else "asynchronous",
+            "output_dir": str(output_dir),
+        },
         "nmh2_q_l_by_b": {str(b): q_l_data[b][0] for b in sorted(q_l_data)},
         "nmh2_theory_fit_chi2": chi2,
         "q_l_calibration": {"theta_fit": theta_fit, "a": a_nmh2, "leaf_size": leaf_size},

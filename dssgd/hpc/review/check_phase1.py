@@ -338,6 +338,13 @@ def main() -> None:
 
     # -- Write gate review JSON --
     review = {
+        "run_parametrization": {
+            "phase1_results": str(results_dir),
+            "queue_dir": str(args.queue_dir),
+            "suffix": suffix,
+            "gossip_protocol": "synchronous" if suffix else "asynchronous",
+            "output_dir": str(output_dir),
+        },
         "nmh1_slopes": {str(a): s for a, (s, se, n) in nmh1_slopes.items()},
         "nmh1_slope_ses": {str(a): se for a, (s, se, n) in nmh1_slopes.items()},
         "slope_confirmed": slope_confirmed,
