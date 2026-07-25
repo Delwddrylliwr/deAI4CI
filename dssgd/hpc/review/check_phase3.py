@@ -231,9 +231,20 @@ def _task_counts(queue_root: Path) -> Dict[str, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gate 3 review for Phase 3 outputs.")
-    parser.add_argument("--phase3-results", type=Path, default=Path("results/phase3"))
-    parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase3"))
-    parser.add_argument("--output-dir", type=Path, default=Path("review"))
+    parser.add_argument(
+        "--phase3-results", type=Path, default=Path("results/phase3a"),
+        help="Async by default (results/phase3a/, matching generate_queue.py's "
+             "phase=='3a' output). Pass results/phase3s + --suffix S for the "
+             "synchronous variant.",
+    )
+    parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase3a"))
+    parser.add_argument(
+        "--output-dir", type=Path, default=None,
+        help="Defaults to review/<phase3-results basename> (e.g. "
+             "review/phase3s/ for --phase3-results results/phase3s), so "
+             "async/sync reviews never collide or need a manually-labelled "
+             "path. Pass explicitly to override.",
+    )
     parser.add_argument(
         "--suffix", type=str, default="",
         help="Suffix appended to NMH5/NMH7/NCP3 pkl dir names for the "
@@ -245,7 +256,7 @@ def main() -> None:
     args = parser.parse_args()
 
     results_dir = args.phase3_results
-    output_dir = args.output_dir
+    output_dir = args.output_dir or Path("review") / results_dir.name
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = args.suffix
 

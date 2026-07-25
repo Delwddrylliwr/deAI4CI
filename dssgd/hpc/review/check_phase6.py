@@ -131,7 +131,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Gate 6 review for Phase 6 outputs (E5,E11,E12a,E12b).")
     parser.add_argument("--phase6-results", type=Path, default=Path("results/phase6a"))
     parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase6a"))
-    parser.add_argument("--output-dir", type=Path, default=Path("review"))
+    parser.add_argument(
+        "--output-dir", type=Path, default=None,
+        help="Defaults to review/<phase6-results basename> (e.g. "
+             "review/phase6s/ for --phase6-results results/phase6s), so "
+             "async/sync reviews never collide or need a manually-labelled "
+             "path. Pass explicitly to override.",
+    )
     parser.add_argument(
         "--suffix", type=str, default="",
         help="Suffix appended to E12a/E12b pkl dir names for the synchronous "
@@ -143,7 +149,7 @@ def main() -> None:
     args = parser.parse_args()
 
     results_dir = args.phase6_results
-    output_dir = args.output_dir
+    output_dir = args.output_dir or Path("review") / results_dir.name
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = args.suffix
 
