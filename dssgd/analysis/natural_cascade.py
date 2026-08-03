@@ -25,6 +25,7 @@ from dssgd.nodes.registry import ModelEntry, ModelRegistry
 from dssgd.protocols.gossip import (
     AsynchronousGossip,
     BoundedStalenessGossip,
+    GossipAveraging,
     SynchronousPairwiseGossip,
 )
 from dssgd.topology.base import Topology
@@ -96,7 +97,14 @@ class NaturalCascadeConfig:
     # source_leaf) were built around silently diverge.
     source_leaf: Optional[int] = None
     layer_name: str = "social"
-    gossip_protocol: str = "async_poisson"   # "async_poisson" or "synchronous"
+    # "async_poisson", "sync_pairwise" (SynchronousPairwiseGossip, Remark 4.3's
+    # H-sched class), "sync_neighbourhood" (GossipAveraging, simultaneous m-way
+    # mean -- Lemma 6.1's basin-destroying mechanism), or "bounded_staleness".
+    # See dssgd.protocols.gossip.protocol_suffix / gossip_mechanisms.md: the
+    # bare "synchronous" string is retired -- it used to mean the m-way mean,
+    # then briefly meant the pairwise class, an ambiguity that made "S"-suffixed
+    # files impossible to interpret without knowing when they were generated.
+    gossip_protocol: str = "async_poisson"
     gossip_rate: Optional[float] = None     # None → auto-set to n_agents (see runner)
     gossip_alpha: float = 0.5               # initiator mixing weight toward the neighbour
     # NMH-6 heterogeneous loss: one (a_i, b_i) per leaf; None = uniform
@@ -339,15 +347,18 @@ def run_natural_cascade_simulation(
             rng=np.random.default_rng(config.seed + 42),
             staleness_bound=config.staleness_bound,
         )
-    elif config.gossip_protocol == "synchronous":
+    elif config.gossip_protocol == "sync_pairwise":
         protocol = SynchronousPairwiseGossip(
             alpha=config.gossip_alpha,
             rng=np.random.default_rng(config.seed + 42),
         )
+    elif config.gossip_protocol == "sync_neighbourhood":
+        protocol = GossipAveraging()
     else:
         raise ValueError(
             f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
-            f"'async_poisson', 'synchronous', or 'bounded_staleness'."
+            f"'async_poisson', 'sync_pairwise', 'sync_neighbourhood', or "
+            f"'bounded_staleness'."
         )
     _has_round_idx = hasattr(protocol, "round_idx")
 

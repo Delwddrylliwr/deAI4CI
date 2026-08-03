@@ -1,4 +1,4 @@
-"""Within-clique fixation test (Experiments E7, E12(b)).
+"""Within-clique fixation test (Experiments E7, E12(b), E15).
 
 A minimal driver, independent of NaturalCascadeConfig's leaf/hierarchy
 bookkeeping (this is a single fully-connected clique, no hierarchy at all):
@@ -7,6 +7,13 @@ record whether the clique fixes at all-B. The empirical fixation frequency
 over many seeds is compared against theory.fixation_probability(j, m,
 theory.fixation_bias(a, b, alpha, r=r)) -- Lemma 3.1's formula with a
 *computed*, not fitted, bias (E7 at r=1; E12(b) sweeps r, Lemma 10.1).
+
+E15 is E12b's counterpart under a genuinely continuous kick-weight law
+(CliqueFixationConfig.kick_weight_law="uniform") rather than E12b's fixed
+alpha -- compare against theory.fixation_bias_distributed, not
+theory.fixation_bias, for that one. See experiment_E15_distributed_kick_
+curvature_ratchet's docstring for why this needed its own experiment rather
+than a parameter sweep on E12b.
 """
 
 import pickle
@@ -20,7 +27,13 @@ import torch
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AsynchronousGossip, SynchronousPairwiseGossip
+from dssgd.protocols.gossip import (
+    AsynchronousGossip,
+    GossipAveraging,
+    SynchronousPairwiseGossip,
+    make_uniform_alpha_sampler,
+    protocol_suffix,
+)
 from dssgd.topology.multilayer import MultiLayerTopology
 from dssgd.topology.static import NestedModularTopology
 
@@ -52,6 +65,19 @@ class CliqueFixationConfig:
     gossip_protocol: str = "async_poisson"
     gossip_rate: Optional[float] = None
     gossip_alpha: float = 0.5
+    # "fixed" (default): every kick uses gossip_alpha exactly, matching
+    # theory.fixation_bias's degenerate kick-weight law. "uniform": each
+    # kick draws alpha ~ Uniform(0,1) fresh (gossip.make_uniform_alpha_
+    # sampler), matching theory.fixation_bias_distributed's default CDF --
+    # a genuinely continuous kick-weight law, testing Lemma 3.1/10.1's
+    # general (non-degenerate) reduction rather than its point-mass special
+    # case. A plain string (not a live Callable) so this config stays
+    # JSON-serialisable for the HPC queue; run_clique_fixation_trial builds
+    # the actual sampler from it at runtime. Only meaningful for
+    # gossip_protocol in {"async_poisson", "sync_pairwise"} (the two that
+    # use a scalar per-kick alpha at all) -- "uniform" with
+    # "sync_neighbourhood" raises, rather than silently having no effect.
+    kick_weight_law: str = "fixed"
 
 
 @dataclass
@@ -114,17 +140,45 @@ def run_clique_fixation_trial(config: CliqueFixationConfig) -> CliqueFixationRun
     ml_topo = MultiLayerTopology({"social": topo})
     compositor = CoupledCompositor()
 
+    if config.kick_weight_law not in ("fixed", "uniform"):
+        raise ValueError(
+            f"Unknown kick_weight_law {config.kick_weight_law!r}; expected "
+            f"'fixed' or 'uniform'."
+        )
+    alpha_sampler = (
+        make_uniform_alpha_sampler(np.random.default_rng(config.seed + 43))
+        if config.kick_weight_law == "uniform" else None
+    )
+
     _async = config.gossip_protocol == "async_poisson"
     if _async:
         rate = (config.gossip_rate or float(config.m)) / float(config.local_steps)
         protocol = AsynchronousGossip(
             rate=rate, mode="poisson", alpha=config.gossip_alpha,
+            alpha_sampler=alpha_sampler,
             rng=np.random.default_rng(config.seed + 42),
         )
-    else:
+    elif config.gossip_protocol == "sync_pairwise":
         protocol = SynchronousPairwiseGossip(
             alpha=config.gossip_alpha,
+            alpha_sampler=alpha_sampler,
             rng=np.random.default_rng(config.seed + 42),
+        )
+    elif config.gossip_protocol == "sync_neighbourhood":
+        if config.kick_weight_law != "fixed":
+            raise ValueError(
+                "kick_weight_law='uniform' has no effect under "
+                "gossip_protocol='sync_neighbourhood' (GossipAveraging has "
+                "no scalar per-kick alpha to distribute -- it mixes with the "
+                "whole neighbourhood via the topology's own weights); "
+                "combining them would silently test nothing, so this is an "
+                "error rather than a silent no-op."
+            )
+        protocol = GossipAveraging()
+    else:
+        raise ValueError(
+            f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
+            f"'async_poisson', 'sync_pairwise', or 'sync_neighbourhood'."
         )
 
     for round_idx in range(config.n_rounds):
@@ -174,7 +228,7 @@ def experiment_E7(
     designed to make between the idealised prediction and the repo's actual
     interleaved kick/local_steps dynamics.
     """
-    prefix = "E7S" if gossip_protocol != "async_poisson" else "E7"
+    prefix = f"E7{protocol_suffix(gossip_protocol)}"
     configs = []
     for m in m_list:
         for b in b_list:
@@ -203,7 +257,7 @@ def experiment_E12b(
     1 - rho_curv(r) and grow with m, with r=1.0 recovering the symmetric
     (undirected) random walk of Lemma 3.1's rho=1 case exactly.
     """
-    prefix = "E12bS" if gossip_protocol != "async_poisson" else "E12b"
+    prefix = f"E12b{protocol_suffix(gossip_protocol)}"
     configs = []
     for r in r_list:
         for m in m_list:
@@ -213,5 +267,54 @@ def experiment_E12b(
                     m=m, j_seeds=1, a=a, b=0.0, r=r, seed=seed,
                     local_steps=local_steps, n_rounds=n_rounds,
                     gossip_protocol=gossip_protocol,
+                ))
+    return configs
+
+
+def experiment_E15_distributed_kick_curvature_ratchet(
+    r_list: List[float] = (1.0, 1.1, 1.2, 1.5, 2.0),
+    m_list: List[int] = (4, 8, 16),
+    a: float = 0.5,
+    seeds: List[int] = tuple(range(50)),
+    local_steps: int = 50,
+    n_rounds: int = 200,
+    gossip_protocol: str = "async_poisson",
+) -> List[CliqueFixationConfig]:
+    """E15: E12b's within-clique curvature ratchet (Lemma 10.1), but under a
+    genuinely continuous kick-weight law (kick_weight_law="uniform": alpha ~
+    Uniform(0,1) per kick, gossip.make_uniform_alpha_sampler) instead of
+    E12b's fixed alpha=0.5 -- the fair test of Lemma 10.1's GENERAL
+    reduction, not its degenerate point-mass special case.
+
+    Why this is a separate experiment from E12b, not a parameter on it: E12b
+    is deliberately kept literal to the degenerate law (theory.fixation_bias,
+    "kept literal ... disagreement with measured fixation frequency is
+    informative, not a bug to silently patch over" -- see that function's
+    docstring). Under the degenerate law, at b=0 with the fixed alpha=0.5
+    sitting exactly on the r=1 symmetric threshold, ANY r>1 flips
+    predicted_q_fix from j/m to a hard 0 (theory.fixation_bias returns
+    rho=inf) -- a discontinuity the session that added this experiment
+    found does not match the smooth empirical decay E12b's own async data
+    shows. theory.fixation_bias_distributed predicts, and this experiment
+    tests, whether that smooth decay is recovered once the simulation's own
+    kick weight is ALSO genuinely distributed (not just the prediction
+    formula): compare empirical fixation frequency against
+    theory.fixation_bias_distributed(a, 0.0, r=r) here, not
+    theory.fixation_bias(a, 0.0, kick_weight=..., r=r) (E12b's comparison,
+    still correct for what E12b actually simulates).
+
+    Output prefix "E15", never "E12b" -- keeps this from being confused
+    with or overwriting E12b's own (degenerate-law, still valid) results.
+    """
+    prefix = f"E15{protocol_suffix(gossip_protocol)}"
+    configs = []
+    for r in r_list:
+        for m in m_list:
+            for seed in seeds:
+                configs.append(CliqueFixationConfig(
+                    name=f"{prefix}/r={r}/m={m}/seed={seed}",
+                    m=m, j_seeds=1, a=a, b=0.0, r=r, seed=seed,
+                    local_steps=local_steps, n_rounds=n_rounds,
+                    gossip_protocol=gossip_protocol, kick_weight_law="uniform",
                 ))
     return configs

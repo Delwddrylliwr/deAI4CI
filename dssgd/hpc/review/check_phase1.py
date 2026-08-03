@@ -35,6 +35,7 @@ if str(_HERE) not in sys.path:
 
 from analysis.natural_cascade import NaturalCascadeRun
 from analysis.nmh_observables import cascade_depth
+from dssgd.protocols.gossip import protocol_from_suffix
 
 
 # ---------------------------------------------------------------------------
@@ -297,12 +298,15 @@ def main() -> None:
              "path. Pass explicitly to override.",
     )
     parser.add_argument(
-        "--suffix", type=str, default="",
-        help="Suffix appended to NMH1/NMH3 pkl dir names for the "
-             "synchronous variant (e.g. 'S' for phase 1s: NMH1S/NMH3S -- "
-             "see generate_queue.py's phase=='1s' branch). NCP1 is "
-             "graph-only (no gossip protocol) and NMH7_pilot has no "
-             "synchronous variant, so neither is affected by --suffix.",
+        "--suffix", type=str, default="", choices=["", "SP", "SN"],
+        help="Suffix appended to NMH1/NMH3 pkl dir names, naming which "
+             "gossip mechanism: '' = async_poisson (default), 'SP' = "
+             "sync_pairwise (phase 1s: NMH1SP/NMH3SP -- see generate_queue"
+             ".py's phase=='1s' branch), 'SN' = sync_neighbourhood. The "
+             "bare 'S' suffix from before these were distinguished is "
+             "retired and no longer accepted -- see gossip_mechanisms.md. "
+             "NCP1 is graph-only (no gossip protocol) and NMH7_pilot has "
+             "no synchronous variant, so neither is affected by --suffix.",
     )
     args = parser.parse_args()
 
@@ -399,7 +403,7 @@ def main() -> None:
             "phase1_results": str(results_dir),
             "queue_dir": str(args.queue_dir),
             "suffix": suffix,
-            "gossip_protocol": "synchronous" if suffix else "asynchronous",
+            "gossip_protocol": protocol_from_suffix(suffix),
             "output_dir": str(output_dir),
         },
         "nmh1_slopes": {str(a): s for a, (s, se, n) in nmh1_slopes.items()},

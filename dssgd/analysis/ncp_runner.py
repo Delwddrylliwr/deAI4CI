@@ -23,7 +23,11 @@ from torch.utils.data import DataLoader, TensorDataset
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AsynchronousGossip, SynchronousPairwiseGossip
+from dssgd.protocols.gossip import (
+    AsynchronousGossip,
+    GossipAveraging,
+    SynchronousPairwiseGossip,
+)
 from dssgd.topology.forest_fire import ForestFireTopology
 from dssgd.topology.multilayer import MultiLayerTopology
 
@@ -65,7 +69,9 @@ class NCPSimConfig:
     layer_name: str = "social"
     # NCP-2: clamp this shell to B throughout measurement (None = free run)
     clamped_shell: Optional[int] = None
-    gossip_protocol: str = "async_poisson"   # "async_poisson" or "synchronous"
+    # "async_poisson", "sync_pairwise" (SynchronousPairwiseGossip), or
+    # "sync_neighbourhood" (GossipAveraging, simultaneous m-way mean).
+    gossip_protocol: str = "async_poisson"
     gossip_rate: Optional[float] = None     # None → auto-set to n_nodes (see runner)
     gossip_alpha: float = 0.5               # initiator mixing weight toward the neighbour
 
@@ -230,10 +236,17 @@ def run_ncp_simulation(config: NCPSimConfig) -> NCPRun:
             alpha=config.gossip_alpha,
             rng=np.random.default_rng(config.seed + 42),
         )
-    else:
+    elif config.gossip_protocol == "sync_pairwise":
         protocol = SynchronousPairwiseGossip(
             alpha=config.gossip_alpha,
             rng=np.random.default_rng(config.seed + 42),
+        )
+    elif config.gossip_protocol == "sync_neighbourhood":
+        protocol = GossipAveraging()
+    else:
+        raise ValueError(
+            f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
+            f"'async_poisson', 'sync_pairwise', or 'sync_neighbourhood'."
         )
 
     # Phase 1: warmup

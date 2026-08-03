@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Cross-protocol comparison: async gossip (Phase xA) vs synchronous (Phase xS).
+"""Cross-protocol comparison: async gossip (Phase xA) vs sync_pairwise (Phase xS).
 
 Loads NMH-1, NMH-1b, and NMH-3 results from both protocol variants and produces
-side-by-side comparison CSVs and a console summary.
+side-by-side comparison CSVs and a console summary. "Phase xS" here always
+means sync_pairwise (suffix "SP") -- see dssgd.protocols.gossip.protocol_suffix
+/ gossip_mechanisms.md; sync_neighbourhood is not wired into this comparison.
 
 Usage:
   # Compare Phase 1A (results/phase1/) vs Phase 1S (results/phase1s/)
@@ -136,11 +138,11 @@ def run_comparison(
     phaseS_dir: Path,
     out_dir: Path,
     nmh1_subdir: str = "NMH1",
-    nmh1s_subdir: str = "NMH1S",
+    nmh1s_subdir: str = "NMH1SP",
     nmh1b_subdir: str = "NMH1b",
-    nmh1bs_subdir: str = "NMH1bS",
+    nmh1bs_subdir: str = "NMH1bSP",
     nmh3_subdir: str = "NMH3",
-    nmh3s_subdir: str = "NMH3S",
+    nmh3s_subdir: str = "NMH3SP",
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 

@@ -3,19 +3,45 @@
 
 Phase ID convention:
   "1a" / 1  — Phase 1A: async gossip (existing Phase 1 queue)
-  "1s"      — Phase 1S: synchronous gossip mirror of Phase 1A
+  "1sp"     — Phase 1SP: synchronous gossip mirror of Phase 1A, using
+              gossip_protocol="sync_pairwise" (SynchronousPairwiseGossip,
+              suffix "SP" -- see dssgd.protocols.gossip.protocol_suffix /
+              gossip_mechanisms.md).
   "2a" / 2  — Phase 2A: async gossip
-  "2s"      — Phase 2S: synchronous gossip mirror
-  (same pattern for 3a/3s, 4a/4s)
+  "2sp"     — Phase 2SP: synchronous gossip mirror
+  (same pattern for 3a/3sp, 4a/4sp, ... 7a/7sp)
+
+NOTE on phase-ID history: this phase-ID suffix used to be the bare "s"
+(e.g. "1s", "2s"), on the assumption that a single phase-level letter was
+enough to say "the sync track" -- unlike the experiment-name suffix
+("SP"/"SN"), which was deliberately made 3-way because the same "S" string
+had silently meant two different mechanisms (GossipAveraging vs
+SynchronousPairwiseGossip) at different points in the repo's history (see
+gossip_mechanisms.md). It turned out the phase-level label had exactly the
+same problem: local pkl/review archives for the old "1s"/"2s"/"6s" phases
+were generated at different points relative to the SynchronousPairwiseGossip
+fix, so "the sync run of phase N" could not be trusted to mean one
+mechanism either, and in Phase 2's and Phase 6's case turned out to mean
+different mechanisms for different experiments *within the same phase*.
+The phase ID is now "Xsp" throughout (matching what every phase branch
+below actually, and exclusively, constructs: gossip_protocol="sync_pairwise").
+There is currently no "Xsn" phase branch -- sync_neighbourhood was never an
+intentional target of any phase, only a historical bug artifact -- but the
+ID space is reserved (see gossip_mechanisms.md's phase-nomenclature section)
+for anyone who deliberately wants to queue it as a comparison arm. Old
+archived data generated under the bare "Xs" convention has been relabelled
+to "Xsn" or "Xsp" (or quarantined, where it was a genuine sub-experiment
+mix) to match what each archive actually contains -- see
+gossip_mechanisms.md.
 
 Integer phase IDs 1–4 are accepted as aliases for "1a"–"4a" (backwards compat).
 Default queue/results directories are queue/phase{id}/ and results/phase{id}/,
-so --phase 1s automatically uses queue/phase1s/ and results/phase1s/.
+so --phase 1sp automatically uses queue/phase1sp/ and results/phase1sp/.
 
 Usage:
-  python -m hpc.generate_queue --phase 1  --queue-dir queue/phase1
-  python -m hpc.generate_queue --phase 1s --queue-dir queue/phase1s
-  python -m hpc.generate_queue --phase 2a --gate1-results review/gate1_review.json
+  python -m hpc.generate_queue --phase 1   --queue-dir queue/phase1
+  python -m hpc.generate_queue --phase 1sp --queue-dir queue/phase1sp
+  python -m hpc.generate_queue --phase 2a  --gate1-results review/gate1_review.json
 """
 import argparse
 import json
@@ -40,6 +66,7 @@ from analysis.natural_cascade_experiments import (
     experiment_E11,
     experiment_E12a,
     experiment_E13,
+    experiment_E14_meritocratic_filter_local_steps,
     experiment_NMH1,
     experiment_NMH1b,
     experiment_NMH1sb,
@@ -50,7 +77,11 @@ from analysis.natural_cascade_experiments import (
     experiment_NMH6,
     experiment_NMH7,
 )
-from analysis.clique_fixation import experiment_E7, experiment_E12b
+from analysis.clique_fixation import (
+    experiment_E7,
+    experiment_E12b,
+    experiment_E15_distributed_kick_curvature_ratchet,
+)
 from analysis.generic_topology_experiments import experiment_E9, experiment_E10
 from analysis.ncp_experiments import (
     experiment_E8,
@@ -60,6 +91,7 @@ from analysis.ncp_experiments import (
     experiment_NCP4,
     experiment_NCP5,
 )
+from dssgd.protocols.gossip import protocol_suffix
 from dssgd.topology.forest_fire import ForestFireTopology
 from hpc.serialization import config_to_dict, task_id_from_config
 
@@ -71,17 +103,22 @@ N_SHARDS = 100
 CHECKPOINT_EVERY_DEFAULT = 50
 
 _VALID_PHASES = {
-    "1a", "1s", "1sb", "2a", "2s", "3a", "3s", "4a", "4s",
-    "5a", "5s", "6a", "6s", "7a", "7s",
+    "1a", "1sp", "1sb", "2a", "2sp", "3a", "3sp", "4a", "4sp",
+    "5a", "5sp", "6a", "6sp", "7a", "7sp",
 }
 _INT_ALIAS = {1: "1a", 2: "2a", 3: "3a", 4: "4a", 5: "5a", 6: "6a", 7: "7a"}
 
 # Estimated wall-clock hours per task (used for duration-balanced shard assignment).
-# S-variant estimates are approximately 2× their A counterparts, carried over from
-# when the synchronous branch used GossipAveraging (all-N-agent averaging per
-# gradient step); it now uses SynchronousPairwiseGossip (round-synchronous maximal
-# matching, comparable per-round cost to async's ~2.56 events) -- these estimates
-# have not been re-measured post-switch and may now overstate the S/A ratio.
+# SP-variant (sync_pairwise) estimates are approximately 2x their A counterparts,
+# carried over from when these were measured against GossipAveraging
+# (sync_neighbourhood, all-N-agent averaging per gradient step) under the old,
+# now-retired bare "synchronous" label; SynchronousPairwiseGossip's round-
+# synchronous maximal matching has comparable per-round cost to async's ~2.56
+# events, so these estimates have not been re-measured for the pairwise
+# mechanism specifically and may overstate the SP/A ratio. sync_neighbourhood
+# is not currently queued by any phase branch below (see gossip_mechanisms.md);
+# if it is added, its cost is expected to resemble these SP estimates (same
+# order of per-round work, different mixing rule) until measured directly.
 EXPERIMENT_HOURS: Dict[str, float] = {
     # Phase 1A / 2A / 3A / 4A
     "NMH1": 0.5,
@@ -101,24 +138,24 @@ EXPERIMENT_HOURS: Dict[str, float] = {
     "NCP4": 0.8,
     "NCP5": 68.0,
     "Comparative": 0.5,
-    # Phase 1S / 1sB / 2S / 3S / 4S (synchronous gossip mirrors and transition sweep)
+    # Phase 1SP / 1sB / 2SP / 3SP / 4SP (sync_pairwise mirrors and transition sweep)
     "NMH1sb": 0.5,
-    "NMH1sbS": 1.0,
-    "NMH1S": 1.0,
-    "NMH1bS": 1.0,
-    "NMH3S": 1.0,
-    "NMH2S": 1.2,
-    "NMH2bS": 1.2,
-    "NMH6S": 2.4,
-    "NCP2S": 1.6,
-    "NMH5S": 1.0,
-    "NMH7S": 4.0,
-    "NCP3S": 1.6,
-    "NMH4S_pilot": 9.3,
-    "NMH4S": 18.6,
-    "NCP4S": 1.6,
-    "NCP5S": 136.0,
-    "ComparativeS": 1.0,
+    "NMH1sbSP": 1.0,
+    "NMH1SP": 1.0,
+    "NMH1bSP": 1.0,
+    "NMH3SP": 1.0,
+    "NMH2SP": 1.2,
+    "NMH2bSP": 1.2,
+    "NMH6SP": 2.4,
+    "NCP2SP": 1.6,
+    "NMH5SP": 1.0,
+    "NMH7SP": 4.0,
+    "NCP3SP": 1.6,
+    "NMH4SP_pilot": 9.3,
+    "NMH4SP": 18.6,
+    "NCP4SP": 1.6,
+    "NCP5SP": 136.0,
+    "ComparativeSP": 1.0,
     # Phase 5A/5S, 6A/6S, 7A/7S (Annex B: E1-E13). Estimates below are
     # calibrated from a two-part local benchmark (see the project plan):
     # (1) a structural unit-count ratio to NMH1 (agents x total_rounds x
@@ -141,28 +178,35 @@ EXPERIMENT_HOURS: Dict[str, float] = {
     # than silently matching it.
     "E1": 0.5,       # NMH1-shaped (~2.5% provenance overhead, Phase 5 benchmark)
     "E2": 0.5,       # NMH1-shaped (fixed-lambda sweep)
-    "E2S": 1.0,
+    "E2SP": 1.0,
     "E3": 0.5,       # NMH1-shaped per TASK (the init=A/B split is separate tasks, not 2x cost each)
-    "E3S": 1.0,
+    "E3SP": 1.0,
     "E4": 1.8,       # depth=7 (512 agents): structural ratio 4.0x NMH1, measured ratio 3.47x
-    "E4S": 3.6,
+    "E4SP": 3.6,
     "E5": 0.5,       # NMH1-shaped sigma-sweep with provenance tracking
     "E6": 0.5,       # NMH1-shaped (per-leaf heterogeneity, no hierarchy change)
-    "E6S": 1.0,
+    "E6SP": 1.0,
     "E7": 0.01,      # single clique (worst case m=16), no hierarchy — measured at full scale
-    "E7S": 0.02,
+    "E7SP": 0.02,
     "E8": 3.0,       # measured: n_nodes=1000 is ~6-8x NMH1's 128 agents per round
-    "E8S": 6.0,
+    "E8SP": 6.0,
     "E9": 0.001,     # single-shot aggregation + relax, no gossip loop, no per-round Topology overhead
     "E10": 0.5,      # measured ratio 0.86x NMH1 (dumbbell at matched N) — structural estimate confirmed
-    "E10S": 1.0,
+    "E10SP": 1.0,
     "E11": 0.5,      # NMH1-shaped scheduling sweep
     "E12a": 0.5,     # == E6
-    "E12aS": 1.0,
+    "E12aSP": 1.0,
     "E12b": 0.01,    # == E7
-    "E12bS": 0.02,
+    "E12bSP": 0.02,
     "E13": 4.0,      # worst case m=32 (1024 agents): structural ratio 8.0x, measured ratio 7.15x
-    "E13S": 8.0,
+    "E13SP": 8.0,
+    "E14": 0.3,      # UNMEASURED rough estimate: depth=3 (8 leaf-types, smaller than E6/E12a's
+                      # depth=5) but local_steps up to 400 (8x the usual 50) in the same sweep;
+                      # protocol is embedded in the config name (all 3 mechanisms share this one
+                      # entry, not split into E14SP/E14SN) -- refine once actually run.
+    "E15": 0.01,     # == E12b (identical mechanism, just a distributed vs fixed kick weight --
+                      # no reason to expect a different per-task cost)
+    "E15SP": 0.02,
 }
 
 # ---------------------------------------------------------------------------
@@ -293,7 +337,7 @@ def _build_ncp2_tasks_with_clamping(
     create two tasks per seed: one clamping the innermost shell (outward cascade)
     and one clamping the outermost shell (inward cascade).
     """
-    exp_name = "NCP2S" if gossip_protocol != "async_poisson" else "NCP2"
+    exp_name = f"NCP2{protocol_suffix(gossip_protocol)}"
     tasks = []
     for seed in seeds:
         topo = ForestFireTopology(n=n_nodes, p_f=p_f, seed=seed)
@@ -372,29 +416,29 @@ def build_phase_tasks(
         for cfg in experiment_NMH7(seeds=_seeds(5), depth=4, n_meas=2000):
             tasks.append(_nc_task(cfg, "NMH7_pilot", phase, results_root))
 
-    # ── Phase 1S (synchronous) ───────────────────────────────────────────────
-    elif phase == "1s":
-        for cfg in experiment_NMH1(gossip_protocol="synchronous", seeds=_seeds(30)):
-            tasks.append(_nc_task(cfg, "NMH1S", phase, results_root))
+    # ── Phase 1SP (sync_pairwise) ────────────────────────────────────────────
+    elif phase == "1sp":
+        for cfg in experiment_NMH1(gossip_protocol="sync_pairwise", seeds=_seeds(30)):
+            tasks.append(_nc_task(cfg, "NMH1SP", phase, results_root))
 
         # Extended ls sweep: [1,2,5] probe the synchronous threshold;
         # [10,50,200] are direct comparison points with Phase 1A.
         for cfg in experiment_NMH1b(
-            gossip_protocol="synchronous",
+            gossip_protocol="sync_pairwise",
             local_steps_list=[1, 2, 5, 10, 50, 200],
             seeds=_seeds(15),
         ):
-            tasks.append(_nc_task(cfg, "NMH1bS", phase, results_root))
+            tasks.append(_nc_task(cfg, "NMH1bSP", phase, results_root))
 
-        for cfg in experiment_NMH3(gossip_protocol="synchronous", seeds=_seeds(25)):
-            tasks.append(_nc_task(cfg, "NMH3S", phase, results_root))
+        for cfg in experiment_NMH3(gossip_protocol="sync_pairwise", seeds=_seeds(25)):
+            tasks.append(_nc_task(cfg, "NMH3SP", phase, results_root))
 
         # NCP1 excluded — graph-only, no gossip protocol.
 
     # ── Phase 1sB (sync transition zone: 2D a × local_steps sweep) ──────────
     elif phase == "1sb":
-        for cfg in experiment_NMH1sb(gossip_protocol="synchronous", seeds=_seeds(75)):
-            tasks.append(_nc_task(cfg, "NMH1sbS", phase, results_root))
+        for cfg in experiment_NMH1sb(gossip_protocol="sync_pairwise", seeds=_seeds(75)):
+            tasks.append(_nc_task(cfg, "NMH1sbSP", phase, results_root))
 
     # ── Phase 2A (async) ────────────────────────────────────────────────────
     elif phase == "2a":
@@ -415,32 +459,32 @@ def build_phase_tasks(
 
         tasks.extend(_build_ncp2_tasks_with_clamping(_seeds(10), phase, results_root))
 
-    # ── Phase 2S (synchronous) ───────────────────────────────────────────────
-    elif phase == "2s":
+    # ── Phase 2SP (sync_pairwise) ────────────────────────────────────────────
+    elif phase == "2sp":
         b_list = gate_results.get(
             "gate1_recommended_b_values",
             [0.020, 0.025, 0.030, 0.035, 0.040, 0.045, 0.050],
         )
 
         for cfg in experiment_NMH2(
-            b_list=b_list, seeds=_seeds(30), gossip_protocol="synchronous"
+            b_list=b_list, seeds=_seeds(30), gossip_protocol="sync_pairwise"
         ):
-            tasks.append(_nc_task(cfg, "NMH2S", phase, results_root))
+            tasks.append(_nc_task(cfg, "NMH2SP", phase, results_root))
 
         for cfg in experiment_NMH2(
             b_list=b_list,
             seeds=list(range(30, 30 + len(_seeds(30)))),
-            gossip_protocol="synchronous",
+            gossip_protocol="sync_pairwise",
         ):
             cfg.name = cfg.name.replace("NMH2S/", "NMH2bS/")
-            tasks.append(_nc_task(cfg, "NMH2bS", phase, results_root))
+            tasks.append(_nc_task(cfg, "NMH2bSP", phase, results_root))
 
-        for cfg in experiment_NMH6(seeds=_seeds(10), gossip_protocol="synchronous"):
-            tasks.append(_nc_task(cfg, "NMH6S", phase, results_root))
+        for cfg in experiment_NMH6(seeds=_seeds(10), gossip_protocol="sync_pairwise"):
+            tasks.append(_nc_task(cfg, "NMH6SP", phase, results_root))
 
         tasks.extend(
             _build_ncp2_tasks_with_clamping(
-                _seeds(10), phase, results_root, gossip_protocol="synchronous"
+                _seeds(10), phase, results_root, gossip_protocol="sync_pairwise"
             )
         )
 
@@ -463,30 +507,30 @@ def build_phase_tasks(
         for cfg in experiment_NMH4(seeds=_seeds(200), depth=5, n_meas=500):
             tasks.append(_nc_task(cfg, "NMH4_pilot", phase, results_root))
 
-    # ── Phase 3S (synchronous) ───────────────────────────────────────────────
-    elif phase == "3s":
+    # ── Phase 3SP (sync_pairwise) ────────────────────────────────────────────
+    elif phase == "3sp":
         b_on_a_list = gate_results.get(
             "gate2_recommended_b_values_phase3",
             [0.02, 0.03, 0.04, 0.05, 0.06],
         )
 
         for cfg in experiment_NMH5(
-            b_on_a_list=b_on_a_list, seeds=_seeds(50), gossip_protocol="synchronous"
+            b_on_a_list=b_on_a_list, seeds=_seeds(50), gossip_protocol="sync_pairwise"
         ):
-            tasks.append(_nc_task(cfg, "NMH5S", phase, results_root))
+            tasks.append(_nc_task(cfg, "NMH5SP", phase, results_root))
 
         for cfg in experiment_NMH7(
-            seeds=_seeds(15), depth=4, n_meas=4000, gossip_protocol="synchronous"
+            seeds=_seeds(15), depth=4, n_meas=4000, gossip_protocol="sync_pairwise"
         ):
-            tasks.append(_nc_task(cfg, "NMH7S", phase, results_root))
+            tasks.append(_nc_task(cfg, "NMH7SP", phase, results_root))
 
-        for cfg in experiment_NCP3(seeds=_seeds(10), gossip_protocol="synchronous"):
-            tasks.append(_ncp_task(cfg, "NCP3S", phase, results_root))
+        for cfg in experiment_NCP3(seeds=_seeds(10), gossip_protocol="sync_pairwise"):
+            tasks.append(_ncp_task(cfg, "NCP3SP", phase, results_root))
 
         for cfg in experiment_NMH4(
-            seeds=_seeds(200), depth=5, n_meas=500, gossip_protocol="synchronous"
+            seeds=_seeds(200), depth=5, n_meas=500, gossip_protocol="sync_pairwise"
         ):
-            tasks.append(_nc_task(cfg, "NMH4S_pilot", phase, results_root))
+            tasks.append(_nc_task(cfg, "NMH4SP_pilot", phase, results_root))
 
     # ── Phase 4A (async) ────────────────────────────────────────────────────
     elif phase == "4a":
@@ -508,29 +552,29 @@ def build_phase_tasks(
             cfg.name = cfg.name.replace("NMH1/", "Comparative/")
             tasks.append(_nc_task(cfg, "Comparative", phase, results_root))
 
-    # ── Phase 4S (synchronous) ───────────────────────────────────────────────
-    elif phase == "4s":
+    # ── Phase 4SP (sync_pairwise) ────────────────────────────────────────────
+    elif phase == "4sp":
         phase4_mods = gate_results.get("gate3_phase4_modifications", "")
         depth = 7 if "depth=7" in phase4_mods else 6
 
         for a in [1.0, 2.0, 4.0]:
             for cfg in experiment_NMH4(
-                seeds=_seeds(500), depth=depth, a=a, gossip_protocol="synchronous"
+                seeds=_seeds(500), depth=depth, a=a, gossip_protocol="sync_pairwise"
             ):
-                tasks.append(_nc_task(cfg, "NMH4S", phase, results_root))
+                tasks.append(_nc_task(cfg, "NMH4SP", phase, results_root))
 
-        for cfg in experiment_NCP4(seeds=_seeds(200), gossip_protocol="synchronous"):
-            tasks.append(_ncp_task(cfg, "NCP4S", phase, results_root))
+        for cfg in experiment_NCP4(seeds=_seeds(200), gossip_protocol="sync_pairwise"):
+            tasks.append(_ncp_task(cfg, "NCP4SP", phase, results_root))
 
-        for cfg in experiment_NCP5(seeds=_seeds(10), gossip_protocol="synchronous"):
-            tasks.append(_ncp_task(cfg, "NCP5S", phase, results_root,
+        for cfg in experiment_NCP5(seeds=_seeds(10), gossip_protocol="sync_pairwise"):
+            tasks.append(_ncp_task(cfg, "NCP5SP", phase, results_root,
                                     checkpoint_every=CHECKPOINT_EVERY_DEFAULT))
 
         for cfg in experiment_NMH1(
-            a_list=[0.5], seeds=_seeds(100), gossip_protocol="synchronous"
+            a_list=[0.5], seeds=_seeds(100), gossip_protocol="sync_pairwise"
         ):
             cfg.name = cfg.name.replace("NMH1S/", "ComparativeS/")
-            tasks.append(_nc_task(cfg, "ComparativeS", phase, results_root))
+            tasks.append(_nc_task(cfg, "ComparativeSP", phase, results_root))
 
     # ── Phase 5A (Track A: independent new infra, no gate dependency) ───────
     # E1, E6, E7, E9, E10, E13 need only their own new subsystem (built this
@@ -542,13 +586,6 @@ def build_phase_tasks(
 
         for cfg in experiment_E6(seeds=_seeds(50)):
             tasks.append(_nc_task(cfg, "E6", phase, results_root))
-
-        # Positive control (assessment doc A.6): small/fast, same-bias variant
-        # verifying the containment/attainment pipeline detects d_max==G
-        # before any real E6/E12a null is trusted -- see check_phase6.py's
-        # e12a_ok scoring.
-        for cfg in experiment_E6_positive_control(seeds=_seeds(20)):
-            tasks.append(_nc_task(cfg, "E6ctrl", phase, results_root))
 
         for cfg in experiment_E7(seeds=_seeds(50)):
             tasks.append(_clique_task(cfg, "E7", phase, results_root))
@@ -562,23 +599,20 @@ def build_phase_tasks(
         for cfg in experiment_E13(seeds=_seeds(30)):
             tasks.append(_nc_task(cfg, "E13", phase, results_root))
 
-    # ── Phase 5S (synchronous mirrors, where meaningful) ────────────────────
-    elif phase == "5s":
-        for cfg in experiment_E6(seeds=_seeds(50), gossip_protocol="synchronous"):
-            tasks.append(_nc_task(cfg, "E6S", phase, results_root))
+    # ── Phase 5SP (sync_pairwise mirrors, where meaningful) ─────────────────
+    elif phase == "5sp":
+        for cfg in experiment_E6(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
+            tasks.append(_nc_task(cfg, "E6SP", phase, results_root))
 
-        for cfg in experiment_E6_positive_control(seeds=_seeds(20), gossip_protocol="synchronous"):
-            tasks.append(_nc_task(cfg, "E6ctrlS", phase, results_root))
+        for cfg in experiment_E7(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
+            tasks.append(_clique_task(cfg, "E7SP", phase, results_root))
 
-        for cfg in experiment_E7(seeds=_seeds(50), gossip_protocol="synchronous"):
-            tasks.append(_clique_task(cfg, "E7S", phase, results_root))
-
-        for cfg in experiment_E10(seeds=_seeds(50), gossip_protocol="synchronous"):
-            tasks.append(_generic_task(cfg, "E10S", phase, results_root))
+        for cfg in experiment_E10(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
+            tasks.append(_generic_task(cfg, "E10SP", phase, results_root))
         # E9 is single-shot (no gossip protocol) -- no sync variant.
 
-        for cfg in experiment_E13(seeds=_seeds(30), gossip_protocol="synchronous"):
-            tasks.append(_nc_task(cfg, "E13S", phase, results_root))
+        for cfg in experiment_E13(seeds=_seeds(30), gossip_protocol="sync_pairwise"):
+            tasks.append(_nc_task(cfg, "E13SP", phase, results_root))
 
     # ── Phase 6A (Track C: second-order on Phase 5's OWN new infra) ────────
     # E5 needs E1's provenance mechanism; E11 needs both provenance and
@@ -595,15 +629,45 @@ def build_phase_tasks(
         for cfg in experiment_E12a(seeds=_seeds(50)):
             tasks.append(_nc_task(cfg, "E12a", phase, results_root))
 
+        # Positive control (assessment doc A.6): small/fast, same-bias variant
+        # verifying the containment/attainment pipeline detects d_max==G
+        # before the real E12a null above is trusted -- queued here (not
+        # Phase 5, where the underlying experiment_E6 mechanism lives) since
+        # this is what check_phase6.py's e12a_ok scoring actually consumes,
+        # from THIS phase's results tree.
+        for cfg in experiment_E6_positive_control(seeds=_seeds(20)):
+            tasks.append(_nc_task(cfg, "E6ctrl", phase, results_root))
+
         for cfg in experiment_E12b(seeds=_seeds(50)):
             tasks.append(_clique_task(cfg, "E12b", phase, results_root))
 
-    elif phase == "6s":
-        for cfg in experiment_E12a(seeds=_seeds(50), gossip_protocol="synchronous"):
-            tasks.append(_nc_task(cfg, "E12aS", phase, results_root))
+        # E14: local_steps sensitivity of the meritocratic filter, sweeping
+        # all three gossip mechanisms internally (like E11) -- queued once
+        # under 6a only, never under 6s (there is no separate E14 sync
+        # variant; protocol is one of E14's own swept dimensions, embedded
+        # in the config name, not a phase-level split).
+        for cfg in experiment_E14_meritocratic_filter_local_steps(seeds=_seeds(20)):
+            tasks.append(_nc_task(cfg, "E14", phase, results_root))
 
-        for cfg in experiment_E12b(seeds=_seeds(50), gossip_protocol="synchronous"):
-            tasks.append(_clique_task(cfg, "E12bS", phase, results_root))
+        # E15: E12b's curvature ratchet under a genuinely distributed kick
+        # weight (kick_weight_law="uniform") instead of E12b's fixed alpha
+        # -- compare against theory.fixation_bias_distributed, not
+        # theory.fixation_bias. Separate output prefix "E15", never "E12b".
+        for cfg in experiment_E15_distributed_kick_curvature_ratchet(seeds=_seeds(50)):
+            tasks.append(_clique_task(cfg, "E15", phase, results_root))
+
+    elif phase == "6sp":
+        for cfg in experiment_E12a(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
+            tasks.append(_nc_task(cfg, "E12aSP", phase, results_root))
+
+        for cfg in experiment_E6_positive_control(seeds=_seeds(20), gossip_protocol="sync_pairwise"):
+            tasks.append(_nc_task(cfg, "E6ctrlSP", phase, results_root))
+
+        for cfg in experiment_E12b(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
+            tasks.append(_clique_task(cfg, "E12bSP", phase, results_root))
+
+        for cfg in experiment_E15_distributed_kick_curvature_ratchet(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
+            tasks.append(_clique_task(cfg, "E15SP", phase, results_root))
         # E5 requires async_poisson (provenance); E11 already sweeps sync
         # internally via its own `schedulings` list -- no separate 6S variant.
 
@@ -632,22 +696,22 @@ def build_phase_tasks(
         for cfg in experiment_E8(seeds=_seeds(50)):
             tasks.append(_ncp_task(cfg, "E8", phase, results_root))
 
-    elif phase == "7s":
+    elif phase == "7sp":
         e2_a_list, e3_a_list, e4_a = _gate1_derived_a_values(gate_results)
 
-        for cfg in experiment_E2(a_list=e2_a_list, seeds=_seeds(30), gossip_protocol="synchronous"):
-            tasks.append(_nc_task(cfg, "E2S", phase, results_root))
+        for cfg in experiment_E2(a_list=e2_a_list, seeds=_seeds(30), gossip_protocol="sync_pairwise"):
+            tasks.append(_nc_task(cfg, "E2SP", phase, results_root))
 
-        for cfg in experiment_E3(a_list=e3_a_list, seeds=_seeds(75), gossip_protocol="synchronous"):
-            tasks.append(_nc_task(cfg, "E3S", phase, results_root))
+        for cfg in experiment_E3(a_list=e3_a_list, seeds=_seeds(75), gossip_protocol="sync_pairwise"):
+            tasks.append(_nc_task(cfg, "E3SP", phase, results_root))
 
         for cfg in experiment_E4(
-            a=e4_a, n_graph_seeds=30, n_dynamics_seeds_per_graph=5, gossip_protocol="synchronous",
+            a=e4_a, n_graph_seeds=30, n_dynamics_seeds_per_graph=5, gossip_protocol="sync_pairwise",
         ):
-            tasks.append(_nc_task(cfg, "E4S", phase, results_root))
+            tasks.append(_nc_task(cfg, "E4SP", phase, results_root))
 
-        for cfg in experiment_E8(seeds=_seeds(50), gossip_protocol="synchronous"):
-            tasks.append(_ncp_task(cfg, "E8S", phase, results_root))
+        for cfg in experiment_E8(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
+            tasks.append(_ncp_task(cfg, "E8SP", phase, results_root))
 
     return tasks
 
@@ -770,7 +834,7 @@ def main() -> None:
     parser.add_argument(
         "--phase", type=str, required=True,
         help=(
-            "Phase ID: '1a'/'1s', '2a'/'2s', '3a'/'3s', '4a'/'4s', "
+            "Phase ID: '1a'/'1sp', '2a'/'2sp', '3a'/'3sp', '4a'/'4sp', "
             "or integers 1–4 (aliases for 1a–4a)."
         ),
     )
@@ -793,7 +857,7 @@ def main() -> None:
     parser.add_argument("--gate3-results", type=str, default=None)
     args = parser.parse_args()
 
-    # Normalise phase: "1" → "1a", "1s" → "1s", 1 → "1a"
+    # Normalise phase: "1" → "1a", "1sp" → "1sp", 1 → "1a"
     try:
         phase_int = int(args.phase)
         phase_id = _normalize_phase(phase_int)

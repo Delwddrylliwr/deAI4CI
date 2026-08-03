@@ -10,11 +10,14 @@ NCP-4: Multi-layer cascade suppression (propagation matrix)
 NCP-5: Stationary distribution factorisation (conditional mutual information)
 
 gossip_protocol parameter (NCP-2 through NCP-5):
-  "async_poisson"  — AsynchronousGossip (default; Phase xA)
-  "synchronous"    — SynchronousPairwiseGossip: round-synchronous maximal-
-                     matching pairwise kicks (Remark 4.3's H-sched class),
-                     NOT GossipAveraging's simultaneous m-way mean (Phase xS)
-  When "synchronous", the experiment name prefix gains an "S" suffix.
+  "async_poisson"        — AsynchronousGossip (default; Phase xA), no suffix
+  "sync_pairwise"        — SynchronousPairwiseGossip: round-synchronous
+                           maximal-matching pairwise kicks (Remark 4.3's
+                           H-sched class), suffix "SP"
+  "sync_neighbourhood"   — GossipAveraging: simultaneous m-way mean (Lemma
+                           6.1's basin-destroying mechanism), suffix "SN"
+  See dssgd.protocols.gossip.protocol_suffix / gossip_mechanisms.md: the bare
+  "synchronous"/"S" label is retired (it was ambiguous between these two).
   NCP-1 is graph-only (no gossip) and has no gossip_protocol parameter.
 
 Theory references use paper1_PDMP_wDAG_wData.md's current numbering
@@ -25,6 +28,7 @@ below still carry over from that earlier draft.
 
 from typing import List, Optional
 
+from dssgd.protocols.gossip import protocol_suffix
 from dssgd.topology.forest_fire import ForestFireTopology
 
 from .ncp_runner import NCPSimConfig
@@ -105,7 +109,7 @@ def experiment_NCP2(
     pass them as clamped_shell.  This factory generates configs with a
     placeholder that callers replace after inspecting the graph.
     """
-    prefix = "NCP2S" if gossip_protocol != "async_poisson" else "NCP2"
+    prefix = f"NCP2{protocol_suffix(gossip_protocol)}"
     configs = []
     for seed in seeds:
         configs.append(NCPSimConfig(
@@ -154,7 +158,7 @@ def experiment_E8(
     sizes (theory.fixation_bias, with the shell size as the effective
     clique size m -- q_fix(1; |S|, rho) -> 1/|S| as rho -> 1, eq. 5.1).
     """
-    prefix = "E8S" if gossip_protocol != "async_poisson" else "E8"
+    prefix = f"E8{protocol_suffix(gossip_protocol)}"
     configs = []
     for seed in seeds:
         topo = ForestFireTopology(n=n_nodes, p_f=p_f, seed=seed)
@@ -192,7 +196,7 @@ def experiment_NCP3(
     Tests Proposition 5.3 (eq. 5.3): χ_k grows with shell outermost-ness.
     Free run (no clamped_shell); stationarity is reached by long n_meas.
     """
-    prefix = "NCP3S" if gossip_protocol != "async_poisson" else "NCP3"
+    prefix = f"NCP3{protocol_suffix(gossip_protocol)}"
     configs = []
     for seed in seeds:
         configs.append(NCPSimConfig(
@@ -238,7 +242,7 @@ def experiment_NCP4(
     shell sizes. 200 seeds per source-shell (callers set clamped_shell after
     graph inspection).
     """
-    prefix = "NCP4S" if gossip_protocol != "async_poisson" else "NCP4"
+    prefix = f"NCP4{protocol_suffix(gossip_protocol)}"
     configs = []
     for seed in seeds:
         configs.append(NCPSimConfig(
@@ -282,7 +286,7 @@ def experiment_NCP5(
     factorisation. Long n_meas=3000 for CMI estimation accuracy. Few seeds
     (10) since each run is long.
     """
-    prefix = "NCP5S" if gossip_protocol != "async_poisson" else "NCP5"
+    prefix = f"NCP5{protocol_suffix(gossip_protocol)}"
     configs = []
     for seed in seeds:
         configs.append(NCPSimConfig(

@@ -9,7 +9,7 @@ Implements formulas from the McKean-Vlasov / Fokker-Planck analysis:
 """
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -451,11 +451,64 @@ def fixation_bias(
     function is deliberately kept literal to Lemma 3.1 rather than curve-fit
     to simulation; disagreement with measured fixation frequency is
     informative, not a bug to silently patch over.
+
+    See fixation_bias_distributed for the general (non-degenerate) reduction
+    under a genuinely continuous kick-weight law -- this function stays as
+    the literal degenerate-law prediction, kept deliberately unchanged so it
+    remains available as the honest "what the fixed-alpha simulation
+    actually implies" baseline the distributed version is compared against.
     """
     geom = chord_geometry(a, b, delta_norm, r=r)
     p_plus = 1.0 if kick_weight >= geom["vartheta_A_to_B"] else 0.0
     p_minus = 1.0 if kick_weight >= geom["vartheta_B_to_A"] else 0.0
     if p_plus == 0.0:
+        return math.inf
+    return p_minus / p_plus
+
+
+def uniform_kick_cdf(x: float) -> float:
+    """CDF of Uniform(0,1) kick weight: F(x) = x for x in [0,1], clipped
+    outside. The natural, parameter-free, maximally-non-informative choice
+    of a genuinely continuous kick-weight law mu_C -- the default for
+    fixation_bias_distributed, and the law gossip.make_uniform_alpha_sampler
+    draws from so the simulation and this prediction stay coupled to the
+    same mu_C (see that function's docstring for why this matters)."""
+    return float(np.clip(x, 0.0, 1.0))
+
+
+def fixation_bias_distributed(
+    a: float, b: float, delta_norm: float = 1.0, r: float = 1.0,
+    kick_weight_cdf: Callable[[float], float] = uniform_kick_cdf,
+) -> float:
+    """Birth-death bias rho = p_-/p_+ (Lemma 3.1's general reduction, Sec.
+    3.1: p_+ := mu_C{C >= vartheta_A_to_B}-average, i.e. Pr_{C~mu_C}[C >=
+    vartheta] = 1 - CDF(vartheta)) under a genuinely continuous kick-weight
+    law mu_C given by its CDF, rather than fixation_bias's single-fixed-
+    kick-weight degenerate special case (which collapses p_+/p_- to hard
+    indicators of whether one fixed alpha clears the threshold).
+
+    Defaults to Uniform(0,1) (uniform_kick_cdf) -- the simplest non-
+    degenerate choice, with no free parameters of its own. Pass a different
+    kick_weight_cdf to test other kick-weight laws without touching this
+    function's structure.
+
+    For this to be a fair test against simulation (not a theory change
+    tested against a simulation that still uses the OLD degenerate law),
+    pair with a protocol whose kick weight is actually drawn from the SAME
+    law each event -- see gossip.AsynchronousGossip/SynchronousPairwiseGossip's
+    `alpha_sampler` parameter and gossip.make_uniform_alpha_sampler. Passing
+    a mismatched cdf/sampler pair silently reintroduces the same kind of
+    theory/simulation mismatch fixation_bias's docstring warns about for the
+    degenerate case, just with a different, harder-to-notice cause.
+
+    r=1.0 (default): Lemma 3.1's depth-only reduction. r!=1: Lemma 10.1's
+    curvature-ratio generalisation (Sec. 10), matching fixation_bias's r
+    handling exactly (same chord_geometry/curvature_epsilon(r) call).
+    """
+    geom = chord_geometry(a, b, delta_norm, r=r)
+    p_plus = 1.0 - kick_weight_cdf(geom["vartheta_A_to_B"])
+    p_minus = 1.0 - kick_weight_cdf(geom["vartheta_B_to_A"])
+    if p_plus <= 0.0:
         return math.inf
     return p_minus / p_plus
 

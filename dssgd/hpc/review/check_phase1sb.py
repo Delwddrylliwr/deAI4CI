@@ -14,7 +14,7 @@ empirical distributions between adjacent (a, ls) conditions.
 
 Usage:
   python -m hpc.review.check_phase1sb --phase 1sb
-  python -m hpc.review.check_phase1sb --pkl-dir results/phase1sb/pkl/NMH1sbS \\
+  python -m hpc.review.check_phase1sb --pkl-dir results/phase1sb/pkl/NMH1sbSP \\
       --out-dir review/phase1sb/
 """
 import argparse
@@ -259,7 +259,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--phase", type=str, default=None,
-        help="Phase ID (e.g. '1sb'). Derives pkl-dir as results/phase{ID}/pkl/NMH1sbS/.",
+        help="Phase ID (e.g. '1sb'). Derives pkl-dir as results/phase{ID}/pkl/NMH1sbSP/.",
     )
     parser.add_argument("--pkl-dir", type=Path, default=None)
     parser.add_argument("--out-dir", type=Path, default=None)
@@ -269,7 +269,7 @@ def main() -> None:
         parser.error("Provide --phase or --pkl-dir.")
 
     phase_id = args.phase.strip() if args.phase else None
-    pkl_dir = args.pkl_dir or Path(f"results/phase{phase_id}/pkl/NMH1sbS")
+    pkl_dir = args.pkl_dir or Path(f"results/phase{phase_id}/pkl/NMH1sbSP")
     out_dir = args.out_dir or Path(f"review/phase{phase_id}/")
 
     run_analysis(pkl_dir, out_dir)

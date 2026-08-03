@@ -22,15 +22,22 @@ Basin-symmetry requirements (see plan):
   - NMH-7: b=0 (symmetric; required by Theorem 2 / Gibbs derivation)
 
 gossip_protocol parameter (all functions):
-  "async_poisson"  — AsynchronousGossip (default; Phase xA)
-  "synchronous"    — GossipAveraging (Phase xS)
-  When "synchronous", the experiment name prefix gains an "S" suffix
-  (e.g. "NMH1S/", "NMH1bS/") so async and sync results live in separate dirs.
+  "async_poisson"        — AsynchronousGossip (default; Phase xA), no suffix
+  "sync_pairwise"        — SynchronousPairwiseGossip (Remark 4.3's H-sched
+                           class), suffix "SP" (e.g. "NMH1SP/")
+  "sync_neighbourhood"   — GossipAveraging (simultaneous m-way mean, Lemma
+                           6.1's basin-destroying mechanism), suffix "SN"
+  See dssgd.protocols.gossip.protocol_suffix / gossip_mechanisms.md: the bare
+  "synchronous"/"S" label is retired -- it used to mean GossipAveraging, then
+  briefly meant SynchronousPairwiseGossip, an ambiguity that made "S"-suffixed
+  files impossible to interpret without knowing when they were generated.
 """
 
 from typing import List, Optional, Tuple
 
 import numpy as np
+
+from dssgd.protocols.gossip import protocol_suffix
 
 from . import theory
 from .generality import per_leaf_loss_params_for_generality
@@ -63,7 +70,7 @@ def experiment_NMH1(
     Uses force_flip_source=True (one random leaf set to B post-warmup) so
     that cascade propagation is driven purely by gossip without thermal noise.
     """
-    prefix = "NMH1S" if gossip_protocol != "async_poisson" else "NMH1"
+    prefix = f"NMH1{protocol_suffix(gossip_protocol)}"
     configs = []
     for a in a_list:
         for seed in seeds:
@@ -110,7 +117,7 @@ def experiment_NMH1b(
     below it, Regime A/B contamination introduces drift.
     Force-flip source so that the cascade is gossip-driven across all local_steps values.
     """
-    prefix = "NMH1bS" if gossip_protocol != "async_poisson" else "NMH1b"
+    prefix = f"NMH1b{protocol_suffix(gossip_protocol)}"
     configs = []
     for ls in local_steps_list:
         for seed in seeds:
@@ -149,7 +156,7 @@ def experiment_NMH1sb(
     lr: float = 0.1,
     n_warmup: int = 400,
     n_meas: int = 1000,
-    gossip_protocol: str = "synchronous",
+    gossip_protocol: str = "sync_pairwise",
 ) -> List[NaturalCascadeConfig]:
     """Transition-zone phase diagram: cascade size distributions across a × local_steps.
 
@@ -158,7 +165,7 @@ def experiment_NMH1sb(
     Griffiths power-law phase exists. Force-flip source decouples cascade
     propagation from nucleation statistics.
     """
-    prefix = "NMH1sbS" if gossip_protocol != "async_poisson" else "NMH1sb"
+    prefix = f"NMH1sb{protocol_suffix(gossip_protocol)}"
     configs = []
     for a in a_list:
         for ls in local_steps_list:
@@ -212,7 +219,7 @@ def experiment_NMH2(
     Natural nucleation (no force-flip): small Langevin noise enables escape
     so that the rate varies measurably across b values.
     """
-    prefix = "NMH2S" if gossip_protocol != "async_poisson" else "NMH2"
+    prefix = f"NMH2{protocol_suffix(gossip_protocol)}"
     configs = []
     for b in b_list:
         for seed in seeds:
@@ -267,7 +274,7 @@ def experiment_NMH3(
     """
     if a_list is None:
         a_list = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 12.0, 16.0]
-    prefix = "NMH3S" if gossip_protocol != "async_poisson" else "NMH3"
+    prefix = f"NMH3{protocol_suffix(gossip_protocol)}"
     configs = []
     for a in a_list:
         for seed in seeds:
@@ -318,7 +325,7 @@ def experiment_NMH4(
     a=2 is in the middle of the Griffiths regime (0.5 ≤ a < 8 for p=2).
     Force-flip source so cascade size reflects gossip propagation, not nucleation.
     """
-    prefix = "NMH4S" if gossip_protocol != "async_poisson" else "NMH4"
+    prefix = f"NMH4{protocol_suffix(gossip_protocol)}"
     configs = []
     for seed in seeds:
         configs.append(NaturalCascadeConfig(
@@ -367,7 +374,7 @@ def experiment_NMH5(
     further) with a sharp threshold at the deepest level geometric filter.
     Force-flip source so propagation depth reflects gossip filter attenuation.
     """
-    prefix = "NMH5S" if gossip_protocol != "async_poisson" else "NMH5"
+    prefix = f"NMH5{protocol_suffix(gossip_protocol)}"
     configs = []
     for a in a_list:
         for b_on_a in b_on_a_list:
@@ -426,7 +433,7 @@ def experiment_NMH6(
     """
     branching = 2
     n_leaf_types = branching ** depth
-    prefix = "NMH6S" if gossip_protocol != "async_poisson" else "NMH6"
+    prefix = f"NMH6{protocol_suffix(gossip_protocol)}"
     configs = []
     for seed in seeds:
         rng = np.random.default_rng(seed + 99991)  # independent of simulation seed
@@ -528,7 +535,7 @@ def experiment_E2(
     (the boundary reappears at the same absolute a as NMH-3), per Remark 2.3.
     """
     lam = theory.dimensionless_tilt(a_anchor, b_anchor)
-    prefix = "E2S" if gossip_protocol != "async_poisson" else "E2"
+    prefix = f"E2{protocol_suffix(gossip_protocol)}"
     configs = []
     for a in a_list:
         b = lam * theory.KAPPA_PHI * a
@@ -572,7 +579,7 @@ def experiment_E3(
     or persists/cascades (a hysteresis break -- the reachable phase would
     then depend on initial condition, not just (a,b)).
     """
-    prefix = "E3S" if gossip_protocol != "async_poisson" else "E3"
+    prefix = f"E3{protocol_suffix(gossip_protocol)}"
     configs = []
     for a in a_list:
         for init_basin in init_basins:
@@ -615,7 +622,7 @@ def experiment_E4(
     differently at analysis time (with nmh_observables.realized_cross_edge_count
     keyed on graph_seed, not seed). depth=7 matches NMH-4's deeper hierarchy.
     """
-    prefix = "E4S" if gossip_protocol != "async_poisson" else "E4"
+    prefix = f"E4{protocol_suffix(gossip_protocol)}"
     configs = []
     for g in range(n_graph_seeds):
         for d in range(n_dynamics_seeds_per_graph):
@@ -717,7 +724,7 @@ def experiment_E6(
     """
     branching = 2
     n_leaf_types = branching ** depth
-    prefix = "E6S" if gossip_protocol != "async_poisson" else "E6"
+    prefix = f"E6{protocol_suffix(gossip_protocol)}"
     configs = []
     for G in generality_levels:
         plp = per_leaf_loss_params_for_generality(
@@ -771,9 +778,9 @@ def experiment_E6_positive_control(
         local_steps=local_steps, n_warmup=n_warmup, n_meas=n_meas,
         source_leaf=source_leaf, gossip_protocol=gossip_protocol,
     )
-    prefix = "E6ctrlS" if gossip_protocol != "async_poisson" else "E6ctrl"
+    prefix = f"E6ctrl{protocol_suffix(gossip_protocol)}"
     for cfg in configs:
-        cfg.name = cfg.name.replace("E6S/", f"{prefix}/").replace("E6/", f"{prefix}/")
+        cfg.name = cfg.name.replace(f"E6{protocol_suffix(gossip_protocol)}/", f"{prefix}/")
     return configs
 
 
@@ -806,9 +813,9 @@ def experiment_E12a(
         n_warmup=n_warmup, n_meas=n_meas, source_leaf=source_leaf,
         gossip_protocol=gossip_protocol,
     )
-    prefix = "E12aS" if gossip_protocol != "async_poisson" else "E12a"
+    prefix = f"E12a{protocol_suffix(gossip_protocol)}"
     for cfg in configs:
-        cfg.name = cfg.name.replace("E6S/", f"{prefix}/").replace("E6/", f"{prefix}/")
+        cfg.name = cfg.name.replace(f"E6{protocol_suffix(gossip_protocol)}/", f"{prefix}/")
     return configs
 
 
@@ -819,7 +826,7 @@ def experiment_E12a(
 
 def experiment_E11(
     schedulings: List[Tuple[str, int]] = (
-        ("synchronous", 0), ("async_poisson", 0), ("bounded_staleness", 2),
+        ("sync_pairwise", 0), ("async_poisson", 0), ("bounded_staleness", 2),
         ("bounded_staleness", 5), ("bounded_staleness", 10),
     ),
     a_list: List[float] = (0.5, 1.0, 2.0, 4.0),
@@ -898,7 +905,7 @@ def experiment_E13(
     """
     branching = 2
     n_leaf_types = branching ** depth
-    prefix = "E13S" if gossip_protocol != "async_poisson" else "E13"
+    prefix = f"E13{protocol_suffix(gossip_protocol)}"
     configs = []
     for delta_in in delta_in_list:
         for m in m_list:
@@ -932,6 +939,85 @@ def experiment_E13(
     return configs
 
 
+# ---------------------------------------------------------------------------
+# E14: local_steps sensitivity of the meritocratic filter (Theorem 4.5)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E14_meritocratic_filter_local_steps(
+    generality_levels: List[int] = (1, 3),
+    local_steps_list: List[int] = (50, 100, 200, 400),
+    protocols: List[str] = ("async_poisson", "sync_pairwise", "sync_neighbourhood"),
+    a: float = 0.5,
+    b_in: float = 0.042,
+    b_out: float = 0.042,
+    seeds: List[int] = tuple(range(20)),
+    depth: int = 3,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    source_leaf: int = 0,
+) -> List[NaturalCascadeConfig]:
+    """E14: is Theorem 4.5's level-matching filter's fidelity a function of
+    local_steps (Regime-C relaxation time), and does that dependence differ
+    by scheduling protocol?
+
+    A DEDICATED, SEPARATE experiment from E6/E12a -- same containment/
+    attainment mechanism (per_leaf_loss_params_for_generality, force-flipped
+    source at `source_leaf`), but sweeping local_steps x protocol instead of
+    holding both fixed, so its outputs (prefix "E14", never "E12a"/"E6") can
+    never be confused with or overwrite the production E6/E12a results this
+    was designed to investigate.
+
+    Motivation: a Phase 6 gate6 review found sync_pairwise's E12a containment
+    completely G-independent (identical d_max distributions for G=1,2,3 at
+    local_steps=50), unlike async_poisson's partial, G-trending containment
+    -- the opposite of Remark 4.3's prediction that round-synchronous H-sched
+    scheduling should PRESERVE the filter, not defeat it entirely. NMH-1b's
+    clean local_steps=50 threshold (Regime C achieved for a single forced
+    leaf's flip persisting against a UNIFORM neighbourhood) does not by
+    itself rule out a *different* failure mode specific to this test: an
+    out-of-scope leaf accumulating pressure from MULTIPLE, differently-biased
+    neighbours across levels, rather than resisting one homogeneous pull.
+    This experiment tests that directly by varying local_steps on the actual
+    containment observable, across all three gossip mechanisms (see
+    gossip_mechanisms.md) rather than inferring from a simpler proxy.
+
+    Protocol is embedded in the config name (name=f"E14/G={G}/ls={ls}/proto=
+    {proto}/seed={seed}"), following E11's convention for experiments that
+    sweep protocol as one of their OWN dimensions, rather than using
+    protocol_suffix's one-call-per-protocol directory-suffix convention --
+    this keeps all three mechanisms' results in one place for direct,
+    matched-seed comparison (see check_phase6.compute_e14_local_steps_table).
+
+    depth=3 (not E6/E12a's production depth=5): this is a diagnostic
+    sensitivity sweep across local_steps x G x protocol (already a large
+    grid at low seed count), not a production-scale confirmatory run -- same
+    scale-reduction rationale as experiment_E6_positive_control.
+    """
+    branching = 2
+    n_leaf_types = branching ** depth
+    configs = []
+    for G in generality_levels:
+        plp = per_leaf_loss_params_for_generality(
+            n_leaf_types=n_leaf_types, source_leaf=source_leaf, generality_level=G,
+            branching=branching, a=a, b_in=b_in, b_out=b_out,
+        )
+        for ls in local_steps_list:
+            for proto in protocols:
+                for seed in seeds:
+                    configs.append(NaturalCascadeConfig(
+                        name=f"E14/G={G}/ls={ls}/proto={proto}/seed={seed}",
+                        branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                        n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=ls,
+                        a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=True,
+                        source_leaf=source_leaf, gossip_protocol=proto,
+                    ))
+    return configs
+
+
 def experiment_NMH7(
     seeds: List[int] = tuple(range(20)),
     depth: int = 4,
@@ -955,7 +1041,7 @@ def experiment_NMH7(
     n_meas=4000 (longer run) for accurate rate estimates.
     Smaller depth=4 to keep per-run cost manageable.
     """
-    prefix = "NMH7S" if gossip_protocol != "async_poisson" else "NMH7"
+    prefix = f"NMH7{protocol_suffix(gossip_protocol)}"
     configs = []
     for seed in seeds:
         configs.append(NaturalCascadeConfig(

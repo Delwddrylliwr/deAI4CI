@@ -32,6 +32,7 @@ if str(_HERE) not in sys.path:
 from analysis.natural_cascade import NaturalCascadeRun
 from analysis.ncp_runner import NCPRun
 from analysis.nmh_observables import cascade_depth, cascade_size, detailed_balance_ratio
+from dssgd.protocols.gossip import protocol_from_suffix
 from analysis.ncp_observables import decoupling_chi
 
 
@@ -234,8 +235,8 @@ def main() -> None:
     parser.add_argument(
         "--phase3-results", type=Path, default=Path("results/phase3a"),
         help="Async by default (results/phase3a/, matching generate_queue.py's "
-             "phase=='3a' output). Pass results/phase3s + --suffix S for the "
-             "synchronous variant.",
+             "phase=='3a' output). Pass results/phase3s + --suffix SP for the "
+             "sync_pairwise variant.",
     )
     parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase3a"))
     parser.add_argument(
@@ -246,12 +247,16 @@ def main() -> None:
              "path. Pass explicitly to override.",
     )
     parser.add_argument(
-        "--suffix", type=str, default="",
-        help="Suffix appended to NMH5/NMH7/NCP3 pkl dir names for the "
-             "synchronous variant (e.g. 'S' for phase 3s: NMH5S/NMH7S/NCP3S "
-             "-- see generate_queue.py's phase=='3s' branch). The pilot dir "
-             "is a special case: generate_queue.py names it 'NMH4S_pilot' "
-             "(suffix inserted before '_pilot'), not 'NMH4_pilotS'.",
+        "--suffix", type=str, default="", choices=["", "SP", "SN"],
+        help="Suffix appended to NMH5/NMH7/NCP3 pkl dir names, naming which "
+             "gossip mechanism: '' = async_poisson (default), 'SP' = "
+             "sync_pairwise (phase 3s: NMH5SP/NMH7SP/NCP3SP -- see "
+             "generate_queue.py's phase=='3s' branch), 'SN' = "
+             "sync_neighbourhood. The bare 'S' suffix from before these "
+             "were distinguished is retired and no longer accepted -- see "
+             "gossip_mechanisms.md. The pilot dir is a special case: "
+             "generate_queue.py names it 'NMH4SP_pilot' (suffix inserted "
+             "before '_pilot'), not 'NMH4_pilotSP'.",
     )
     args = parser.parse_args()
 
@@ -351,7 +356,7 @@ def main() -> None:
             "phase3_results": str(results_dir),
             "queue_dir": str(args.queue_dir),
             "suffix": suffix,
-            "gossip_protocol": "synchronous" if suffix else "asynchronous",
+            "gossip_protocol": protocol_from_suffix(suffix),
             "output_dir": str(output_dir),
         },
         "nmh5_filter_confirmed": filter_ok,

@@ -34,6 +34,7 @@ from analysis.natural_cascade import NaturalCascadeRun
 from analysis.nmh_observables import cascade_depth
 from analysis.provenance import classify_flip_provenance
 from analysis import theory
+from dssgd.protocols.gossip import protocol_from_suffix
 
 
 # ---------------------------------------------------------------------------
@@ -203,12 +204,16 @@ def main() -> None:
              "path. Pass explicitly to override.",
     )
     parser.add_argument(
-        "--suffix", type=str, default="",
-        help="Suffix appended to E7/E6/E1/E13 pkl dir names for the "
-             "synchronous variant (e.g. 'S' for phase 5s: E7S/E6S/E13S -- "
-             "see generate_queue.py's phase=='5s' branch). Phase 5s has no "
-             "synchronous variant of E1, so that dir simply won't be found "
-             "when --suffix is set (E1 isn't gate-critical).",
+        "--suffix", type=str, default="", choices=["", "SP", "SN"],
+        help="Suffix appended to E7/E6/E1/E13 pkl dir names, naming which "
+             "gossip mechanism: '' = async_poisson (default), 'SP' = "
+             "sync_pairwise (phase 5s: E7SP/E6SP/E13SP -- see "
+             "generate_queue.py's phase=='5s' branch), 'SN' = "
+             "sync_neighbourhood. The bare 'S' suffix from before these "
+             "were distinguished is retired and no longer accepted -- see "
+             "gossip_mechanisms.md. Phase 5s has no synchronous variant of "
+             "E1, so that dir simply won't be found when --suffix is set "
+             "(E1 isn't gate-critical).",
     )
     args = parser.parse_args()
 
@@ -274,7 +279,7 @@ def main() -> None:
             "phase5_results": str(results_dir),
             "queue_dir": str(args.queue_dir),
             "suffix": suffix,
-            "gossip_protocol": "synchronous" if suffix else "asynchronous",
+            "gossip_protocol": protocol_from_suffix(suffix),
             "output_dir": str(output_dir),
         },
         "e7_fixation_table": e7_rows,

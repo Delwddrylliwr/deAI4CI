@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import networkx as nx
 import numpy as np
@@ -15,7 +15,17 @@ class Protocol(ABC):
 
 
 class GossipAveraging(Protocol):
-    """Synchronous gossip: all agents snapshot state, then each averages with neighbours + self."""
+    """Synchronous NEIGHBOURHOOD-averaging gossip (gossip_protocol="sync_neighbourhood",
+    suffix "SN"): all agents snapshot state, then each averages with its
+    whole current neighbourhood + self -- a simultaneous m-way mean, not a
+    pairwise kick. This is the mechanism E9/Lemma 6.1's basin-destruction
+    result deliberately uses (uniform averaging is basin-destroying). It is
+    NOT the H-sched round-synchronous scheduling of Remark 4.3 -- that is
+    SynchronousPairwiseGossip ("sync_pairwise", suffix "SP") below. The two
+    were conflated under a single "synchronous"/"S" label until this
+    distinction was introduced; see gossip_mechanisms.md for the history and
+    rationale, and never assume an "S"-suffixed file predating that note
+    means this class rather than the other."""
 
     def execute(self, comm_round: CommunicationRound, agents: List[Agent]):
         # Snapshot before any agent mutates its model
@@ -112,7 +122,20 @@ class AsynchronousGossip(Protocol):
     alpha : float
         Initiator mixing weight toward the neighbour.  0.5 gives a symmetric
         pairwise average on the initiator side; 1.0 is a full copy (pure push
-        from the neighbour's perspective).  Default 0.5.
+        from the neighbour's perspective).  Default 0.5. Ignored if
+        `alpha_sampler` is set.
+    alpha_sampler : Callable[[], float] | None
+        If set, draws a FRESH kick weight from this callable for every
+        event, instead of using the fixed `alpha` -- this is this repo's
+        degenerate kick-weight law (a point mass at `alpha`, see
+        theory.fixation_bias's docstring) generalised to a genuinely
+        continuous one (theory.fixation_bias_distributed). Use
+        `make_uniform_alpha_sampler` for the natural Uniform(0,1) default
+        that pairs with `fixation_bias_distributed`'s own default CDF --
+        passing a sampler here whose distribution doesn't match whatever
+        CDF a prediction assumes reintroduces a theory/simulation mismatch,
+        just a subtler one than the all-fixed-alpha case. None (default)
+        preserves the exact original fixed-alpha behaviour.
     rng : np.random.Generator | None
         Seeded RNG for reproducibility; a fresh generator is created if None.
     """
@@ -123,6 +146,7 @@ class AsynchronousGossip(Protocol):
         mode: str = "poisson",
         interval: int = 1,
         alpha: float = 0.5,
+        alpha_sampler: Optional[Callable[[], float]] = None,
         rng: Optional[np.random.Generator] = None,
     ):
         if mode not in ("poisson", "fixed"):
@@ -131,8 +155,12 @@ class AsynchronousGossip(Protocol):
         self.mode = mode
         self.interval = interval
         self.alpha = alpha
+        self.alpha_sampler = alpha_sampler
         self._rng = rng if rng is not None else np.random.default_rng()
         self._round_counter = 0
+
+    def _current_alpha(self) -> float:
+        return self.alpha_sampler() if self.alpha_sampler is not None else self.alpha
 
     @property
     def rng(self) -> np.random.Generator:
@@ -168,10 +196,11 @@ class AsynchronousGossip(Protocol):
             sender_state = sender.get_state(comm_round.state_keys, comm_round.param_mask)
             self_state = initiator.get_state(comm_round.state_keys, comm_round.param_mask)
 
+            alpha = self._current_alpha()
             initiator.aggregate(
                 comm_round,
                 {initiator.id: self_state, sender_id: sender_state},
-                {initiator.id: 1.0 - self.alpha, sender_id: self.alpha},
+                {initiator.id: 1.0 - alpha, sender_id: alpha},
             )
 
 
@@ -233,15 +262,17 @@ class BoundedStalenessGossip(AsynchronousGossip):
             sender_state = sender.get_state(comm_round.state_keys, comm_round.param_mask)
             self_state = initiator.get_state(comm_round.state_keys, comm_round.param_mask)
 
+            alpha = self._current_alpha()
             initiator.aggregate(
                 comm_round,
                 {initiator.id: self_state, sender_id: sender_state},
-                {initiator.id: 1.0 - self.alpha, sender_id: self.alpha},
+                {initiator.id: 1.0 - alpha, sender_id: alpha},
             )
 
 
 class SynchronousPairwiseGossip(Protocol):
-    """Round-synchronous scheduling of pairwise kicks (Remark 4.3's H-sched class,
+    """Round-synchronous scheduling of pairwise kicks (gossip_protocol=
+    "sync_pairwise", suffix "SP"; Remark 4.3's H-sched class,
     paper1_PDMP_wDAG_wData.md Section 4.2/Annex D.1: "Round-synchronous scheduling
     (all edges, or a maximal matching, per round, with full relaxation between
     rounds) enforces [single-seed resolution] by construction").
@@ -262,19 +293,37 @@ class SynchronousPairwiseGossip(Protocol):
     alpha : float
         Initiator mixing weight toward the neighbour, matching
         AsynchronousGossip's `alpha` (default 0.5: symmetric pairwise average
-        on the initiator side).
+        on the initiator side). Ignored if `alpha_sampler` is set.
+    alpha_sampler : Callable[[], float] | None
+        If set, draws a FRESH kick weight per matched pair instead of using
+        the fixed `alpha` -- see AsynchronousGossip's `alpha_sampler` for the
+        full rationale (theory.fixation_bias_distributed's simulation-side
+        counterpart); `make_uniform_alpha_sampler` gives the matching
+        Uniform(0,1) default. None (default) preserves the exact original
+        fixed-alpha behaviour.
     rng : np.random.Generator | None
-        Seeded RNG for reproducibility (used only to pick, per matched pair,
-        which endpoint is the initiator); a fresh generator is created if None.
+        Seeded RNG for reproducibility (used to pick, per matched pair,
+        which endpoint is the initiator, and to draw from `alpha_sampler`
+        if you build one from this same generator); a fresh generator is
+        created if None.
     """
 
-    def __init__(self, alpha: float = 0.5, rng: Optional[np.random.Generator] = None):
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        alpha_sampler: Optional[Callable[[], float]] = None,
+        rng: Optional[np.random.Generator] = None,
+    ):
         self.alpha = alpha
+        self.alpha_sampler = alpha_sampler
         self._rng = rng if rng is not None else np.random.default_rng()
 
     @property
     def rng(self) -> np.random.Generator:
         return self._rng
+
+    def _current_alpha(self) -> float:
+        return self.alpha_sampler() if self.alpha_sampler is not None else self.alpha
 
     def execute(self, comm_round: CommunicationRound, agents: List[Agent]):
         all_states = {
@@ -290,11 +339,28 @@ class SynchronousPairwiseGossip(Protocol):
             else:
                 initiator_id, sender_id = v, u
             initiator = agent_map[initiator_id]
+            alpha = self._current_alpha()
             initiator.aggregate(
                 comm_round,
                 {initiator_id: all_states[initiator_id], sender_id: all_states[sender_id]},
-                {initiator_id: 1.0 - self.alpha, sender_id: self.alpha},
+                {initiator_id: 1.0 - alpha, sender_id: alpha},
             )
+
+
+def make_uniform_alpha_sampler(rng: Optional[np.random.Generator] = None) -> Callable[[], float]:
+    """Kick-weight sampler drawing a fresh alpha ~ Uniform(0,1) each call --
+    the simulation-side counterpart to theory.uniform_kick_cdf /
+    fixation_bias_distributed's default kick-weight law mu_C. Pass as the
+    `alpha_sampler` argument to AsynchronousGossip/SynchronousPairwiseGossip
+    so the actual kick mechanics draw from the SAME law a
+    fixation_bias_distributed prediction assumes, rather than the theory and
+    simulation sides independently guessing what "distributed kick weight"
+    means (see gossip_mechanisms.md and theory.fixation_bias's docstring for
+    why this repo's original fixed-alpha default was a degenerate special
+    case of this, not a distribution at all).
+    """
+    rng = rng if rng is not None else np.random.default_rng()
+    return lambda: float(rng.random())
 
 
 class CompositeProtocol(Protocol):
@@ -317,3 +383,74 @@ class CompositeProtocol(Protocol):
     def execute(self, comm_round: CommunicationRound, agents: List[Agent]):
         for protocol in self.protocols:
             protocol.execute(comm_round, agents)
+
+
+# ---------------------------------------------------------------------------
+# gossip_protocol string -> experiment-name/pkl-directory suffix
+# ---------------------------------------------------------------------------
+#
+# Single source of truth for the three mechanisms every NMH/NCP experiment
+# factory distinguishes by filename suffix. Introduced to fix a real
+# reproducibility hazard: "synchronous"/"S" used to mean GossipAveraging (a
+# bug -- see gossip_mechanisms.md), then briefly meant SynchronousPairwiseGossip
+# after that bug was fixed, silently reusing the same label for a different
+# mechanism. Going forward "S" alone is retired; every sync-family experiment
+# must say which of the two it means, so an "SP"/"SN"-suffixed file is
+# unambiguous regardless of when it was generated.
+
+PROTOCOL_SUFFIXES = {
+    "async_poisson": "",
+    "sync_pairwise": "SP",
+    "sync_neighbourhood": "SN",
+}
+
+
+def protocol_suffix(gossip_protocol: str) -> str:
+    """Experiment-name/pkl-directory suffix for a gossip_protocol string.
+
+    Raises on any value outside the three general-purpose mechanisms (async,
+    sync_pairwise, sync_neighbourhood) -- deliberately, rather than silently
+    treating an unrecognised or legacy string (e.g. the retired bare
+    "synchronous") as one mechanism or another. bounded_staleness is not
+    covered here: it is E11-specific and uses its own name-embedded scheme
+    (name=f"E11/proto={protocol}/stale={staleness}/...") rather than a
+    directory suffix.
+    """
+    try:
+        return PROTOCOL_SUFFIXES[gossip_protocol]
+    except KeyError:
+        raise ValueError(
+            f"Unknown gossip_protocol {gossip_protocol!r}; expected one of "
+            f"{sorted(PROTOCOL_SUFFIXES)} for this experiment."
+        ) from None
+
+
+# Reverse lookup for review/reporting scripts (check_phase*.py's --suffix CLI
+# argument): given the suffix a caller passes, report which mechanism it
+# names. Deliberately has no entry for "" -> bare "S": that string is retired
+# and any script still passing it should fail loudly, not silently guess.
+SUFFIX_TO_PROTOCOL = {
+    "": "async_poisson",
+    "SP": "sync_pairwise",
+    "SN": "sync_neighbourhood",
+}
+
+
+def protocol_from_suffix(suffix: str) -> str:
+    """Inverse of protocol_suffix: gossip_protocol name for a suffix string.
+
+    Raises on the retired bare "S" (ambiguous between sync_pairwise and
+    sync_neighbourhood) or any other unrecognised suffix, rather than
+    guessing which mechanism produced a given file.
+    """
+    try:
+        return SUFFIX_TO_PROTOCOL[suffix]
+    except KeyError:
+        raise ValueError(
+            f"Unknown suffix {suffix!r}; expected one of "
+            f"{sorted(SUFFIX_TO_PROTOCOL)}. If this is the retired bare "
+            f"'S' suffix from before sync_pairwise/sync_neighbourhood were "
+            f"distinguished, you must know (e.g. from when the data was "
+            f"generated) which mechanism it actually is and pass 'SP' or "
+            f"'SN' explicitly -- see gossip_mechanisms.md."
+        ) from None

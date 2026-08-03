@@ -53,6 +53,7 @@ from dssgd.nodes.registry import ModelEntry, ModelRegistry
 from dssgd.protocols.gossip import (
     AsynchronousGossip,
     BoundedStalenessGossip,
+    GossipAveraging,
     SynchronousPairwiseGossip,
 )
 from dssgd.topology.base import Topology
@@ -290,15 +291,18 @@ class CheckpointableRunner:
                 rate=per_step_rate, mode="poisson", alpha=config.gossip_alpha,
                 rng=np.random.default_rng(config.seed + 42), staleness_bound=config.staleness_bound,
             )
-        elif config.gossip_protocol == "synchronous":
+        elif config.gossip_protocol == "sync_pairwise":
             protocol = SynchronousPairwiseGossip(
                 alpha=config.gossip_alpha,
                 rng=np.random.default_rng(config.seed + 42),
             )
+        elif config.gossip_protocol == "sync_neighbourhood":
+            protocol = GossipAveraging()
         else:
             raise ValueError(
                 f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
-                f"'async_poisson', 'synchronous', or 'bounded_staleness'."
+                f"'async_poisson', 'sync_pairwise', 'sync_neighbourhood', or "
+                f"'bounded_staleness'."
             )
         _has_round_idx = hasattr(protocol, "round_idx")
 
@@ -535,10 +539,17 @@ class CheckpointableRunner:
                 rate=per_step_rate, mode="poisson", alpha=config.gossip_alpha,
                 rng=np.random.default_rng(config.seed + 42),
             )
-        else:
+        elif config.gossip_protocol == "sync_pairwise":
             protocol = SynchronousPairwiseGossip(
                 alpha=config.gossip_alpha,
                 rng=np.random.default_rng(config.seed + 42),
+            )
+        elif config.gossip_protocol == "sync_neighbourhood":
+            protocol = GossipAveraging()
+        else:
+            raise ValueError(
+                f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
+                f"'async_poisson', 'sync_pairwise', or 'sync_neighbourhood'."
             )
 
         # Warmup
@@ -675,6 +686,7 @@ class CheckpointableRunner:
             t_nucleation=t_nucleation,
             flip_table=flip_table,
             graph_stats=graph_stats,
+            clamped_shell=config.clamped_shell,
         )
 
     # ------------------------------------------------------------------

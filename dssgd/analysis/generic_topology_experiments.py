@@ -9,6 +9,8 @@ from typing import List, Tuple
 
 import numpy as np
 
+from dssgd.protocols.gossip import protocol_suffix
+
 from .generic_topology_runner import GenericTopologyConfig
 
 
@@ -102,7 +104,7 @@ def experiment_E10(
     the paper predicts categorically different stratification/filtering.
     """
     n_nodes = nmh_branching ** nmh_depth * nmh_leaf_size
-    prefix = "E10S" if gossip_protocol != "async_poisson" else "E10"
+    prefix = f"E10{protocol_suffix(gossip_protocol)}"
     configs = []
     for bridge_p in bridge_p_list:
         for a in a_list:

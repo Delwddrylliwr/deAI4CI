@@ -38,7 +38,11 @@ import torch
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
 from dssgd.nodes.registry import ModelEntry, ModelRegistry
-from dssgd.protocols.gossip import AsynchronousGossip, SynchronousPairwiseGossip
+from dssgd.protocols.gossip import (
+    AsynchronousGossip,
+    GossipAveraging,
+    SynchronousPairwiseGossip,
+)
 from dssgd.topology.base import Topology
 from dssgd.topology.multilayer import MultiLayerTopology
 from dssgd.topology.static import DumbbellTopology, StarTopology
@@ -81,7 +85,9 @@ class GenericTopologyConfig:
     init_basin: str = "A"
     force_flip_source: bool = False
     flip_noise_scale: float = 0.0
-    gossip_protocol: str = "async_poisson"   # "async_poisson" or "synchronous"
+    # "async_poisson", "sync_pairwise" (SynchronousPairwiseGossip), or
+    # "sync_neighbourhood" (GossipAveraging, simultaneous m-way mean).
+    gossip_protocol: str = "async_poisson"
     gossip_rate: Optional[float] = None
     gossip_alpha: float = 0.5
     # collapse-mode only (E9):
@@ -203,13 +209,18 @@ def run_generic_cascade_simulation(
             rate=per_step_rate, mode="poisson", alpha=config.gossip_alpha,
             rng=np.random.default_rng(config.seed + 42),
         )
-    elif config.gossip_protocol == "synchronous":
+    elif config.gossip_protocol == "sync_pairwise":
         protocol = SynchronousPairwiseGossip(
             alpha=config.gossip_alpha,
             rng=np.random.default_rng(config.seed + 42),
         )
+    elif config.gossip_protocol == "sync_neighbourhood":
+        protocol = GossipAveraging()
     else:
-        raise ValueError(f"Unknown gossip_protocol {config.gossip_protocol!r}")
+        raise ValueError(
+            f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
+            f"'async_poisson', 'sync_pairwise', or 'sync_neighbourhood'."
+        )
 
     def _exec_round(round_idx: int) -> None:
         layer_graphs = ml_topo.step(round_idx)

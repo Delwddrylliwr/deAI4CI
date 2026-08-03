@@ -43,6 +43,7 @@ if str(_HERE) not in sys.path:
 from analysis.natural_cascade import NaturalCascadeRun
 from analysis.ncp_runner import NCPRun
 from analysis.nmh_observables import hierarchical_variance_decomposition
+from dssgd.protocols.gossip import protocol_from_suffix
 
 
 # ---------------------------------------------------------------------------
@@ -379,8 +380,8 @@ def main() -> None:
     parser.add_argument(
         "--phase2-results", type=Path, default=Path("results/phase2a"),
         help="Async by default (results/phase2a/, matching generate_queue.py's "
-             "phase=='2a' output). Pass results/phase2s + --suffix S for the "
-             "synchronous variant.",
+             "phase=='2a' output). Pass results/phase2s + --suffix SP for the "
+             "sync_pairwise variant.",
     )
     parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase2a"))
     parser.add_argument(
@@ -391,10 +392,14 @@ def main() -> None:
              "path. Pass explicitly to override.",
     )
     parser.add_argument(
-        "--suffix", type=str, default="",
-        help="Suffix appended to NMH2/NMH6/NCP2 pkl dir names for the "
-             "synchronous variant (e.g. 'S' for phase 2s: NMH2S/NMH6S/NCP2S "
-             "-- see generate_queue.py's phase=='2s' branch).",
+        "--suffix", type=str, default="", choices=["", "SP", "SN"],
+        help="Suffix appended to NMH2/NMH6/NCP2 pkl dir names, naming which "
+             "gossip mechanism: '' = async_poisson (default), 'SP' = "
+             "sync_pairwise (phase 2s: NMH2SP/NMH6SP/NCP2SP -- see "
+             "generate_queue.py's phase=='2s' branch), 'SN' = "
+             "sync_neighbourhood. The bare 'S' suffix from before these "
+             "were distinguished is retired and no longer accepted -- see "
+             "gossip_mechanisms.md.",
     )
     args = parser.parse_args()
 
@@ -489,9 +494,10 @@ def main() -> None:
 
     # -- NCP-2: directionality --
     ncp2_pkl_dir = results_dir / "pkl" / f"NCP2{suffix}"
+    ncp2_available = ncp2_pkl_dir.exists()
     p_out, p_in, n_out, n_in = float("nan"), float("nan"), 0, 0
     asymmetry_ratio = float("nan")
-    if ncp2_pkl_dir.exists():
+    if ncp2_available:
         p_out, p_in, n_out, n_in = compute_ncp2_directionality(ncp2_pkl_dir)
         asymmetry_ratio = p_out / max(p_in, 1e-9) if not math.isnan(p_in) and p_in > 0 else float("nan")
         csv_rows = [
@@ -500,6 +506,9 @@ def main() -> None:
         ]
         _write_csv(output_dir / "gate2_ncp2_cascade.csv", csv_rows)
         print(f"NCP-2 asymmetry ratio (outward/inward): {asymmetry_ratio:.2f}")
+        if n_out == 0 or n_in == 0:
+            print(f"  [warn] NCP-2 pkls found ({n_out} outward, {n_in} inward classifiable) "
+                  "— check clamped_shell is populated on result pickles")
     else:
         print(f"  [warn] {ncp2_pkl_dir} not found — skipping NCP-2")
 
@@ -510,9 +519,17 @@ def main() -> None:
     # ad hoc chi2<10 threshold this used to gate on (chi2 alone can't
     # discriminate voter from pairwise -- both are scored on their own scale).
     delta_aic = nmh2_aic.get("delta_aic", float("nan"))
+    # NCP-2 only blocks the gate if it was actually run for this phase (dir
+    # present) -- a run that never queued NCP-2 shouldn't fail Gate 2 on it,
+    # but a run that queued it and came back NaN (e.g. no classifiable
+    # outward/inward pickles) is a real failure, not a silent pass.
+    ncp2_ok = (
+        not ncp2_available
+        or (not math.isnan(asymmetry_ratio) and asymmetry_ratio > 2.0)
+    )
     gate_pass = (
         not math.isnan(delta_aic) and delta_aic > 4
-        and (math.isnan(asymmetry_ratio) or asymmetry_ratio > 2.0)
+        and ncp2_ok
     )
 
     review = {
@@ -520,7 +537,7 @@ def main() -> None:
             "phase2_results": str(results_dir),
             "queue_dir": str(args.queue_dir),
             "suffix": suffix,
-            "gossip_protocol": "synchronous" if suffix else "asynchronous",
+            "gossip_protocol": protocol_from_suffix(suffix),
             "output_dir": str(output_dir),
         },
         "nmh2_q_l_by_b": {str(b): q_l_data[b][0] for b in sorted(q_l_data)},
