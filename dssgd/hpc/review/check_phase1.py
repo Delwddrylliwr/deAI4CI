@@ -288,12 +288,25 @@ def _write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gate 1 review for Phase 1 outputs.")
-    parser.add_argument("--phase1-results", type=Path, default=Path("results/phase1"))
-    parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase1"))
+    parser.add_argument(
+        "--phase1-results", type=Path, default=None,
+        help="Defaults from --suffix: results/phase1 for '' (async), "
+             "results/phase1sp for 'SP', results/phase1sn for 'SN' -- "
+             "matching generate_queue.py's phase ID convention (see "
+             "gossip_mechanisms.md). Pass explicitly to override; if you "
+             "do, make sure it actually matches --suffix, or NMH1/NMH3 "
+             "pkl dirs silently won't be found (see gossip_mechanisms.md's "
+             "phase-ID-ambiguity note for why this bit people before).",
+    )
+    parser.add_argument(
+        "--queue-dir", type=Path, default=None,
+        help="Defaults from --suffix the same way as --phase1-results "
+             "(queue/phase1, queue/phase1sp, queue/phase1sn).",
+    )
     parser.add_argument(
         "--output-dir", type=Path, default=None,
         help="Defaults to review/<phase1-results basename> (e.g. "
-             "review/phase1s/ for --phase1-results results/phase1s), so "
+             "review/phase1sp/ for --phase1-results results/phase1sp), so "
              "async/sync reviews never collide or need a manually-labelled "
              "path. Pass explicitly to override.",
     )
@@ -301,19 +314,22 @@ def main() -> None:
         "--suffix", type=str, default="", choices=["", "SP", "SN"],
         help="Suffix appended to NMH1/NMH3 pkl dir names, naming which "
              "gossip mechanism: '' = async_poisson (default), 'SP' = "
-             "sync_pairwise (phase 1s: NMH1SP/NMH3SP -- see generate_queue"
-             ".py's phase=='1s' branch), 'SN' = sync_neighbourhood. The "
+             "sync_pairwise (phase 1sp: NMH1SP/NMH3SP -- see generate_queue"
+             ".py's phase=='1sp' branch), 'SN' = sync_neighbourhood. The "
              "bare 'S' suffix from before these were distinguished is "
              "retired and no longer accepted -- see gossip_mechanisms.md. "
              "NCP1 is graph-only (no gossip protocol) and NMH7_pilot has "
-             "no synchronous variant, so neither is affected by --suffix.",
+             "no synchronous variant, so neither is affected by --suffix. "
+             "Also drives --phase1-results/--queue-dir defaults, see those.",
     )
     args = parser.parse_args()
 
-    results_dir = args.phase1_results
+    suffix = args.suffix
+    _phase_tag = {"": "1", "SP": "1sp", "SN": "1sn"}[suffix]
+    results_dir = args.phase1_results or Path(f"results/phase{_phase_tag}")
+    queue_dir = args.queue_dir or Path(f"queue/phase{_phase_tag}")
     output_dir = args.output_dir or Path("review") / results_dir.name
     output_dir.mkdir(parents=True, exist_ok=True)
-    suffix = args.suffix
 
     # -- NMH-1 slopes --
     nmh1_pkl_dir = results_dir / "pkl" / f"NMH1{suffix}"
@@ -382,7 +398,7 @@ def main() -> None:
         print(f"NMH-7 pilot warmup OK rate: {nmh7_ok_rate:.2f} ({ok}/{len(nmh7_runs)})")
 
     # -- Task audit --
-    task_counts = audit_tasks(args.queue_dir)
+    task_counts = audit_tasks(queue_dir)
     print(f"Task audit: {task_counts}")
 
     # -- Recommended b values for Phase 2 --
@@ -401,7 +417,7 @@ def main() -> None:
     review = {
         "run_parametrization": {
             "phase1_results": str(results_dir),
-            "queue_dir": str(args.queue_dir),
+            "queue_dir": str(queue_dir),
             "suffix": suffix,
             "gossip_protocol": protocol_from_suffix(suffix),
             "output_dir": str(output_dir),

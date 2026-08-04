@@ -378,16 +378,25 @@ def _task_counts(queue_root: Path) -> Dict[str, int]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gate 2 review for Phase 2 outputs.")
     parser.add_argument(
-        "--phase2-results", type=Path, default=Path("results/phase2a"),
-        help="Async by default (results/phase2a/, matching generate_queue.py's "
-             "phase=='2a' output). Pass results/phase2s + --suffix SP for the "
-             "sync_pairwise variant.",
+        "--phase2-results", type=Path, default=None,
+        help="Defaults from --suffix: results/phase2a for '' (async), "
+             "results/phase2sp for 'SP', results/phase2sn for 'SN' -- "
+             "matching generate_queue.py's phase ID convention (see "
+             "gossip_mechanisms.md). Pass explicitly to override; if you "
+             "do, make sure it actually matches --suffix, or NMH2/NMH6/"
+             "NCP2 pkl dirs silently won't be found (see "
+             "gossip_mechanisms.md's phase-ID-ambiguity note for why this "
+             "bit people before).",
     )
-    parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase2a"))
+    parser.add_argument(
+        "--queue-dir", type=Path, default=None,
+        help="Defaults from --suffix the same way as --phase2-results "
+             "(queue/phase2a, queue/phase2sp, queue/phase2sn).",
+    )
     parser.add_argument(
         "--output-dir", type=Path, default=None,
         help="Defaults to review/<phase2-results basename> (e.g. "
-             "review/phase2s/ for --phase2-results results/phase2s), so "
+             "review/phase2sp/ for --phase2-results results/phase2sp), so "
              "async/sync reviews never collide or need a manually-labelled "
              "path. Pass explicitly to override.",
     )
@@ -395,18 +404,21 @@ def main() -> None:
         "--suffix", type=str, default="", choices=["", "SP", "SN"],
         help="Suffix appended to NMH2/NMH6/NCP2 pkl dir names, naming which "
              "gossip mechanism: '' = async_poisson (default), 'SP' = "
-             "sync_pairwise (phase 2s: NMH2SP/NMH6SP/NCP2SP -- see "
-             "generate_queue.py's phase=='2s' branch), 'SN' = "
+             "sync_pairwise (phase 2sp: NMH2SP/NMH6SP/NCP2SP -- see "
+             "generate_queue.py's phase=='2sp' branch), 'SN' = "
              "sync_neighbourhood. The bare 'S' suffix from before these "
              "were distinguished is retired and no longer accepted -- see "
-             "gossip_mechanisms.md.",
+             "gossip_mechanisms.md. Also drives --phase2-results/"
+             "--queue-dir defaults, see those.",
     )
     args = parser.parse_args()
 
-    results_dir = args.phase2_results
+    suffix = args.suffix
+    _phase_tag = {"": "2a", "SP": "2sp", "SN": "2sn"}[suffix]
+    results_dir = args.phase2_results or Path(f"results/phase{_phase_tag}")
+    queue_dir = args.queue_dir or Path(f"queue/phase{_phase_tag}")
     output_dir = args.output_dir or Path("review") / results_dir.name
     output_dir.mkdir(parents=True, exist_ok=True)
-    suffix = args.suffix
 
     # -- NMH-2: q_l(b) curve --
     nmh2_pkl_dir = results_dir / "pkl" / f"NMH2{suffix}"
@@ -512,7 +524,7 @@ def main() -> None:
     else:
         print(f"  [warn] {ncp2_pkl_dir} not found — skipping NCP-2")
 
-    task_counts = _task_counts(args.queue_dir)
+    task_counts = _task_counts(queue_dir)
 
     # G2.1 (HPC_experiment_spec.md): Delta AIC > 4 favouring voter is the
     # spec's stated formulation-discrimination criterion, replacing the
@@ -535,7 +547,7 @@ def main() -> None:
     review = {
         "run_parametrization": {
             "phase2_results": str(results_dir),
-            "queue_dir": str(args.queue_dir),
+            "queue_dir": str(queue_dir),
             "suffix": suffix,
             "gossip_protocol": protocol_from_suffix(suffix),
             "output_dir": str(output_dir),

@@ -194,12 +194,25 @@ def _task_counts(queue_root: Path) -> Dict[str, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gate 5 review for Phase 5 outputs (E1,E6,E7,E9,E10,E13).")
-    parser.add_argument("--phase5-results", type=Path, default=Path("results/phase5a"))
-    parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase5a"))
+    parser.add_argument(
+        "--phase5-results", type=Path, default=None,
+        help="Defaults from --suffix: results/phase5a for '' (async), "
+             "results/phase5sp for 'SP', results/phase5sn for 'SN' -- "
+             "matching generate_queue.py's phase ID convention (see "
+             "gossip_mechanisms.md). Pass explicitly to override; if you "
+             "do, make sure it actually matches --suffix, or E1/E6/E7/E13 "
+             "pkl dirs silently won't be found (see gossip_mechanisms.md's "
+             "phase-ID-ambiguity note for why this bit people before).",
+    )
+    parser.add_argument(
+        "--queue-dir", type=Path, default=None,
+        help="Defaults from --suffix the same way as --phase5-results "
+             "(queue/phase5a, queue/phase5sp, queue/phase5sn).",
+    )
     parser.add_argument(
         "--output-dir", type=Path, default=None,
         help="Defaults to review/<phase5-results basename> (e.g. "
-             "review/phase5s/ for --phase5-results results/phase5s), so "
+             "review/phase5sp/ for --phase5-results results/phase5sp), so "
              "async/sync reviews never collide or need a manually-labelled "
              "path. Pass explicitly to override.",
     )
@@ -207,20 +220,23 @@ def main() -> None:
         "--suffix", type=str, default="", choices=["", "SP", "SN"],
         help="Suffix appended to E7/E6/E1/E13 pkl dir names, naming which "
              "gossip mechanism: '' = async_poisson (default), 'SP' = "
-             "sync_pairwise (phase 5s: E7SP/E6SP/E13SP -- see "
-             "generate_queue.py's phase=='5s' branch), 'SN' = "
+             "sync_pairwise (phase 5sp: E7SP/E6SP/E13SP -- see "
+             "generate_queue.py's phase=='5sp' branch), 'SN' = "
              "sync_neighbourhood. The bare 'S' suffix from before these "
              "were distinguished is retired and no longer accepted -- see "
-             "gossip_mechanisms.md. Phase 5s has no synchronous variant of "
+             "gossip_mechanisms.md. Phase 5sp has no synchronous variant of "
              "E1, so that dir simply won't be found when --suffix is set "
-             "(E1 isn't gate-critical).",
+             "(E1 isn't gate-critical). --suffix also drives "
+             "--phase5-results/--queue-dir defaults, see those.",
     )
     args = parser.parse_args()
 
-    results_dir = args.phase5_results
+    suffix = args.suffix
+    _phase_tag = {"": "5a", "SP": "5sp", "SN": "5sn"}[suffix]
+    results_dir = args.phase5_results or Path(f"results/phase{_phase_tag}")
+    queue_dir = args.queue_dir or Path(f"queue/phase{_phase_tag}")
     output_dir = args.output_dir or Path("review") / results_dir.name
     output_dir.mkdir(parents=True, exist_ok=True)
-    suffix = args.suffix
 
     # -- E7: fixation vs computed rho --
     e7_pkl_dir = results_dir / "pkl" / f"E7{suffix}"
@@ -271,13 +287,13 @@ def main() -> None:
     else:
         print(f"  [warn] {e13_pkl_dir} not found — skipping E13")
 
-    task_counts = _task_counts(args.queue_dir)
+    task_counts = _task_counts(queue_dir)
     gate_pass = e7_ok and e6_ok
 
     review = {
         "run_parametrization": {
             "phase5_results": str(results_dir),
-            "queue_dir": str(args.queue_dir),
+            "queue_dir": str(queue_dir),
             "suffix": suffix,
             "gossip_protocol": protocol_from_suffix(suffix),
             "output_dir": str(output_dir),

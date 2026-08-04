@@ -256,12 +256,26 @@ def compute_e12b_r1_controls(rows: List[Dict[str, Any]]) -> Dict[int, Optional[b
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gate 6 review for Phase 6 outputs (E5,E11,E12a,E12b).")
-    parser.add_argument("--phase6-results", type=Path, default=Path("results/phase6a"))
-    parser.add_argument("--queue-dir", type=Path, default=Path("queue/phase6a"))
+    parser.add_argument(
+        "--phase6-results", type=Path, default=None,
+        help="Defaults from --suffix: results/phase6a for '' (async), "
+             "results/phase6sp for 'SP', results/phase6sn for 'SN' -- "
+             "matching generate_queue.py's phase ID convention (see "
+             "gossip_mechanisms.md). Pass explicitly to override; if you "
+             "do, make sure it actually matches --suffix, or E12a/E12b/"
+             "E15 pkl dirs silently won't be found (see "
+             "gossip_mechanisms.md's phase-ID-ambiguity note for why this "
+             "bit people before).",
+    )
+    parser.add_argument(
+        "--queue-dir", type=Path, default=None,
+        help="Defaults from --suffix the same way as --phase6-results "
+             "(queue/phase6a, queue/phase6sp, queue/phase6sn).",
+    )
     parser.add_argument(
         "--output-dir", type=Path, default=None,
         help="Defaults to review/<phase6-results basename> (e.g. "
-             "review/phase6s/ for --phase6-results results/phase6s), so "
+             "review/phase6sp/ for --phase6-results results/phase6sp), so "
              "async/sync reviews never collide or need a manually-labelled "
              "path. Pass explicitly to override.",
     )
@@ -269,19 +283,22 @@ def main() -> None:
         "--suffix", type=str, default="", choices=["", "SP", "SN"],
         help="Suffix appended to E12a/E12b pkl dir names, naming which "
              "gossip mechanism: '' = async_poisson (default), 'SP' = "
-             "sync_pairwise (phase 6s: E12aSP/E12bSP -- see generate_queue"
-             ".py's phase=='6s' branch), 'SN' = sync_neighbourhood. The "
+             "sync_pairwise (phase 6sp: E12aSP/E12bSP -- see generate_queue"
+             ".py's phase=='6sp' branch), 'SN' = sync_neighbourhood. The "
              "bare 'S' suffix from before these were distinguished is "
              "retired and no longer accepted -- see gossip_mechanisms.md. "
-             "Phase 6s has no synchronous variant of E5/E11, so those are "
-             "skipped entirely when --suffix is set.",
+             "Phase 6sp has no synchronous variant of E5/E11, so those are "
+             "skipped entirely when --suffix is set. --suffix also drives "
+             "--phase6-results/--queue-dir defaults, see those.",
     )
     args = parser.parse_args()
 
-    results_dir = args.phase6_results
+    suffix = args.suffix
+    _phase_tag = {"": "6a", "SP": "6sp", "SN": "6sn"}[suffix]
+    results_dir = args.phase6_results or Path(f"results/phase{_phase_tag}")
+    queue_dir = args.queue_dir or Path(f"queue/phase{_phase_tag}")
     output_dir = args.output_dir or Path("review") / results_dir.name
     output_dir.mkdir(parents=True, exist_ok=True)
-    suffix = args.suffix
 
     e5_rows: List[Dict[str, Any]] = []
     if suffix:
@@ -373,7 +390,7 @@ def main() -> None:
     # only (not gated into gate6_pass), queued once under phase 6a's results
     # tree regardless of which suffix this review invocation is for (E14
     # sweeps protocol as its own dimension, so it naturally won't be found
-    # when reviewing a phase6s-style results_dir where it was never queued).
+    # when reviewing a phase6sp-style results_dir where it was never queued).
     e14_pkl_dir = results_dir / "pkl" / "E14"
     e14_rows: List[Dict[str, Any]] = []
     if e14_pkl_dir.exists():
@@ -395,13 +412,13 @@ def main() -> None:
     else:
         print(f"  [warn] {e15_pkl_dir} not found — skipping E15 (diagnostic, not gate-critical)")
 
-    task_counts = _task_counts(args.queue_dir)
+    task_counts = _task_counts(queue_dir)
     gate_pass = (e12a_ok and e12b_ok) if suffix else (e11_ok and e12a_ok and e12b_ok)
 
     review = {
         "run_parametrization": {
             "phase6_results": str(results_dir),
-            "queue_dir": str(args.queue_dir),
+            "queue_dir": str(queue_dir),
             "suffix": suffix,
             "gossip_protocol": protocol_from_suffix(suffix),
             "output_dir": str(output_dir),
