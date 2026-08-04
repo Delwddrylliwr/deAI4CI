@@ -288,6 +288,23 @@ class SynchronousPairwiseGossip(Protocol):
     untouched this round (at most one kick per agent per round, as under a
     maximal matching).
 
+    The matching is recomputed with a FRESH randomized greedy order every round
+    (`self._rng`-shuffled edges, not `nx.maximal_matching(graph)` directly).
+    `nx.maximal_matching` is a deterministic greedy scan over `graph.edges()`'s
+    fixed iteration order: on a static topology (the common case -- the same
+    graph object every round) it returns the exact same matching every single
+    call, forever. On a hierarchical/modular topology this locks in whichever
+    edges the greedy scan reaches first -- typically the dense within-module
+    ties, since those get enumerated before the sparser cross-module ones --
+    and those cross-module edges then never fire, ever, for the whole run: a
+    confirmed real bug (found empirically: at NMH-1's default topology, 232 of
+    232 cross-leaf-module edges were excluded from the fixed matching, and
+    NMH-1 showed literally zero nucleation events beyond the source's own
+    leaf). Reshuffling per round is what makes round-synchronous matching
+    diffusive over time, matching every other protocol here (AsynchronousGossip
+    picks a fresh random neighbour every event) and the informal gossip/
+    consensus literature's convention for matching-based protocols.
+
     Parameters
     ----------
     alpha : float
@@ -325,13 +342,28 @@ class SynchronousPairwiseGossip(Protocol):
     def _current_alpha(self) -> float:
         return self.alpha_sampler() if self.alpha_sampler is not None else self.alpha
 
+    def _randomized_maximal_matching(self, graph: nx.Graph) -> List[tuple]:
+        """Greedy maximal matching over a FRESH randomized edge order every
+        call -- see the class docstring for why `nx.maximal_matching(graph)`
+        itself (deterministic given a fixed graph) is unusable here."""
+        edges = list(graph.edges())
+        self._rng.shuffle(edges)
+        matched: set = set()
+        matching = []
+        for u, v in edges:
+            if u not in matched and v not in matched:
+                matching.append((u, v))
+                matched.add(u)
+                matched.add(v)
+        return matching
+
     def execute(self, comm_round: CommunicationRound, agents: List[Agent]):
         all_states = {
             a.id: a.get_state(comm_round.state_keys, comm_round.param_mask)
             for a in agents
         }
         agent_map = {a.id: a for a in agents}
-        matching = nx.maximal_matching(comm_round.graph)
+        matching = self._randomized_maximal_matching(comm_round.graph)
 
         for u, v in matching:
             if self._rng.random() < 0.5:

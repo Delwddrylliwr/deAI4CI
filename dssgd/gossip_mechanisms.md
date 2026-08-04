@@ -1,5 +1,29 @@
 # The three gossip mechanisms, and why pairwise sync got its own name
 
+> **2026-08-04: `sync_pairwise` was structurally unable to nucleate across module
+> boundaries, ever, until this date.** `SynchronousPairwiseGossip.execute()` called
+> `nx.maximal_matching(comm_round.graph)` directly. `nx.maximal_matching` is a
+> deterministic greedy scan over the graph's fixed edge order; on a static topology
+> (the same graph object every round, which is the normal case) it returns the
+> *identical* matching every single round, forever. Confirmed empirically at NMH-1's
+> default topology: 232 of 232 cross-leaf-module edges were excluded from the fixed
+> matching — meaning no information could ever cross a module boundary, for a run of
+> any length. This is why a from-scratch Phase 1sp re-run (410 completed tasks, correct
+> post-fix code otherwise) showed **zero** NMH-1 flips beyond the source's own leaf and
+> a degenerate NMH-3 phase-boundary estimate. Fixed by recomputing the matching with a
+> freshly `self._rng`-shuffled edge order every round
+> (`SynchronousPairwiseGossip._randomized_maximal_matching`), verified against the same
+> topology (231/232 cross-module edges used within 50 rounds) and covered by
+> `dssgd/tests/test_gossip_protocols.py`.
+>
+> **Practical upshot: every `sync_pairwise`/`SP`-labelled result generated before this
+> fix is invalid**, not just diagnostically weak — this includes the just-completed
+> Phase 1sp run and any earlier `SP`-suffixed local pkl/review data (E7SP, E12aSP,
+> E12bSP, etc., wherever it exists). None of it can be salvaged by rescoring; the
+> underlying dynamics never had a chance to produce cross-module cascades at all. Any
+> `sync_pairwise` phase must be re-run from scratch under the current code before its
+> results mean anything.
+
 This repo distinguishes three gossip mechanisms, each with its own `gossip_protocol`
 string and experiment-name/pkl-directory suffix (`dssgd.protocols.gossip.protocol_suffix`
 / `protocol_from_suffix`):
