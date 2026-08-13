@@ -19,7 +19,7 @@ than a parameter sweep on E12b.
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -30,6 +30,7 @@ from dssgd.nodes.registry import ModelEntry, ModelRegistry
 from dssgd.protocols.gossip import (
     AsynchronousGossip,
     GossipAveraging,
+    HybridGossip,
     SynchronousPairwiseGossip,
     make_uniform_alpha_sampler,
     protocol_suffix,
@@ -79,6 +80,21 @@ class CliqueFixationConfig:
     # "sync_neighbourhood" raises, rather than silently having no effect.
     kick_weight_law: str = "fixed"
 
+    # Hybrid protocol only (gossip_protocol="hybrid"): round ratio K
+    # (eq. 2.2c) and the Type-N period, exactly as NaturalCascadeConfig's
+    # fields of the same name -- see HybridGossip.pairwise_rate_for_K.
+    round_ratio: Optional[float] = None
+    epsilon_n_rounds: int = 1
+
+    # B.0.2 mandatory logging: within-clique occupancy n(t) (B-count),
+    # sampled after every protocol.execute() call -- Type-P granularity,
+    # guaranteed to include every round boundary since Type-N (when it
+    # fires) runs inside the same execute() call, before that call's Type-P
+    # sub-step. This is the direct, non-fitted measurement of T_hit
+    # (eq. 3.2c) the calibration ladder (E14/H2) needs to score q_hyb.
+    # Only meaningful -- and only allowed -- under gossip_protocol="hybrid".
+    track_occupancy: bool = False
+
 
 @dataclass
 class CliqueFixationRun:
@@ -92,6 +108,9 @@ class CliqueFixationRun:
     r: float
     seed: int
     fixed_at_B: bool  # True iff every agent ended in basin B
+    # (round_idx, n_B) after every protocol.execute() call, oldest first;
+    # None unless config.track_occupancy=True (see that field's docstring).
+    occupancy_log: Optional[List[Tuple[int, int]]] = None
 
     def save(self, path: Union[str, Path]) -> None:
         p = Path(path)
@@ -140,6 +159,12 @@ def run_clique_fixation_trial(config: CliqueFixationConfig) -> CliqueFixationRun
     ml_topo = MultiLayerTopology({"social": topo})
     compositor = CoupledCompositor()
 
+    if config.track_occupancy and config.gossip_protocol != "hybrid":
+        raise ValueError(
+            "track_occupancy requires gossip_protocol='hybrid' (n(t) at "
+            f"Type-P/Type-N granularity is undefined for {config.gossip_protocol!r})"
+        )
+
     if config.kick_weight_law not in ("fixed", "uniform"):
         raise ValueError(
             f"Unknown kick_weight_law {config.kick_weight_law!r}; expected "
@@ -175,13 +200,41 @@ def run_clique_fixation_trial(config: CliqueFixationConfig) -> CliqueFixationRun
                 "error rather than a silent no-op."
             )
         protocol = GossipAveraging()
+    elif config.gossip_protocol == "hybrid":
+        _async = True
+        rate = (
+            HybridGossip.pairwise_rate_for_K(config.round_ratio, config.epsilon_n_rounds)
+            if config.round_ratio is not None
+            else (config.gossip_rate or float(config.m))
+        )
+        protocol = HybridGossip(
+            pairwise_rate=rate / float(config.local_steps),
+            epsilon_n_rounds=config.epsilon_n_rounds,
+            alpha=config.gossip_alpha,
+            alpha_sampler=alpha_sampler,
+            rng=np.random.default_rng(config.seed + 42),
+        )
     else:
         raise ValueError(
             f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
-            f"'async_poisson', 'sync_pairwise', or 'sync_neighbourhood'."
+            f"'async_poisson', 'sync_pairwise', 'sync_neighbourhood', or 'hybrid'."
         )
 
+    def _count_B() -> int:
+        return sum(
+            1 for a in agents
+            if basin_label(
+                list(a.registry["model"].model.parameters())[0].detach().numpy(),
+                theta_A_np, theta_B_np, config.epsilon,
+            ) == "B"
+        )
+
+    occupancy_log: Optional[List[Tuple[int, int]]] = [] if config.track_occupancy else None
+    _has_round_idx = hasattr(protocol, "round_idx")
+
     for round_idx in range(config.n_rounds):
+        if _has_round_idx:
+            protocol.round_idx = round_idx
         layer_graphs = ml_topo.step(round_idx)
         plan = compositor.compose(layer_graphs, agents[0].registry)
         for _ in range(config.local_steps):
@@ -190,6 +243,8 @@ def run_clique_fixation_trial(config: CliqueFixationConfig) -> CliqueFixationRun
             if _async:
                 for comm_round in plan.rounds:
                     protocol.execute(comm_round, agents)
+                if occupancy_log is not None:
+                    occupancy_log.append((round_idx, _count_B()))
         if not _async:
             for comm_round in plan.rounds:
                 protocol.execute(comm_round, agents)
@@ -202,13 +257,68 @@ def run_clique_fixation_trial(config: CliqueFixationConfig) -> CliqueFixationRun
     )
     return CliqueFixationRun(
         name=config.name, m=config.m, j_seeds=config.j_seeds, a=config.a, b=config.b,
-        r=config.r, seed=config.seed, fixed_at_B=fixed_at_B,
+        r=config.r, seed=config.seed, fixed_at_B=fixed_at_B, occupancy_log=occupancy_log,
     )
 
 
 # ---------------------------------------------------------------------------
 # Experiment factories: E7 (fixation formula) and E12(b) (curvature ratchet)
 # ---------------------------------------------------------------------------
+
+
+def experiment_E14_round_ratio_sweep(
+    K_list: List[float] = (0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0),
+    m_list: List[int] = (4, 8, 16),
+    a: float = 0.5,
+    b_list: List[float] = (0.02, 0.04),  # Annex B.1's "two lambda"
+    epsilon_n_rounds: int = 5,
+    seeds: List[int] = tuple(range(20)),
+    local_steps: int = 50,
+    n_rounds: int = 200,
+) -> List[CliqueFixationConfig]:
+    """paper1_computing_hybrid_gossip.md Annex B.1's revised E14
+    ("round-ratio sweep. Sweep K over four decades... m in {4,8,16}, two
+    lambda; per-round fixation frequency from a single seed, and T_hit
+    directly from the logged n(t)") -- a DIFFERENT experiment from the
+    original paper's E14 (which swept local_steps x G x protocol on the
+    full NMH hierarchy testbed, natural_cascade_experiments.
+    experiment_E14_meritocratic_filter_local_steps, still queued as-is
+    under phase 6a). Given the deliberately unambiguous-naming discipline
+    gossip_mechanisms.md establishes for exactly this kind of collision
+    (two different things briefly sharing one label), this experiment uses
+    prefix "E14RR" (round ratio), never bare "E14", so its task/pkl/review
+    provenance can never be confused with phase 6a's E14 data regardless of
+    when either was generated.
+
+    K is swept by varying the aggregate Type-P rate at a FIXED
+    epsilon_n_rounds, not (as the paper's prose suggests) by varying
+    epsilon_n at fixed epsilon_p: q_hyb depends on K alone, not on
+    epsilon_p/epsilon_n separately (Sec. 2.1's whole point in defining K as
+    a single dimensionless group), and this discrete-round simulator cannot
+    represent epsilon_n_rounds < 1, so sweeping via round_ratio (which
+    derives pairwise_rate = K / epsilon_n_rounds, HybridGossip.
+    pairwise_rate_for_K) realises the identical target K values that
+    varying epsilon_n_rounds directly would, without hitting that floor.
+
+    track_occupancy=True on every task: the direct, non-fitted measurement
+    of T_hit (eq. 3.2c) and per-round fixation frequency check_phaseh2.py
+    scores against theory.fixation_probability_hybrid / detection_floor.
+    """
+    prefix = "E14RR"
+    configs = []
+    for m in m_list:
+        for b in b_list:
+            for K in K_list:
+                for seed in seeds:
+                    configs.append(CliqueFixationConfig(
+                        name=f"{prefix}/m={m}/b={b}/K={K}/seed={seed}",
+                        m=m, j_seeds=1, a=a, b=b, r=1.0, seed=seed,
+                        local_steps=local_steps, n_rounds=n_rounds,
+                        gossip_protocol="hybrid", round_ratio=K,
+                        epsilon_n_rounds=epsilon_n_rounds,
+                        track_occupancy=True,
+                    ))
+    return configs
 
 
 def experiment_E7(

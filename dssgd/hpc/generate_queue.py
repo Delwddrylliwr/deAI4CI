@@ -46,6 +46,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -67,6 +68,7 @@ from analysis.natural_cascade_experiments import (
     experiment_E12a,
     experiment_E13,
     experiment_E14_meritocratic_filter_local_steps,
+    experiment_E16,
     experiment_NMH1,
     experiment_NMH1b,
     experiment_NMH1sb,
@@ -80,8 +82,11 @@ from analysis.natural_cascade_experiments import (
 from analysis.clique_fixation import (
     experiment_E7,
     experiment_E12b,
+    experiment_E14_round_ratio_sweep,
     experiment_E15_distributed_kick_curvature_ratchet,
 )
+from analysis.chord_calibration import experiment_E0
+from analysis.multi_basin_destruction import experiment_E15MB
 from analysis.generic_topology_experiments import experiment_E9, experiment_E10
 from analysis.ncp_experiments import (
     experiment_E8,
@@ -105,6 +110,9 @@ CHECKPOINT_EVERY_DEFAULT = 50
 _VALID_PHASES = {
     "1a", "1sp", "1sb", "2a", "2sp", "3a", "3sp", "4a", "4sp",
     "5a", "5sp", "6a", "6sp", "7a", "7sp",
+    "h1",  # paper1_computing_hybrid_gossip.md Annex B.1's E0 gate (see plan doc)
+    "h2",  # Annex B.1's E7 (reused as-is) + E14RR (round-ratio sweep)
+    "h3",  # Annex B.2 protocol axis: E17 (analysis-only), E16, E11H, E5H, E15MB
 }
 _INT_ALIAS = {1: "1a", 2: "2a", 3: "3a", 4: "4a", 5: "5a", 6: "6a", 7: "7a"}
 
@@ -207,6 +215,25 @@ EXPERIMENT_HOURS: Dict[str, float] = {
     "E15": 0.01,     # == E12b (identical mechanism, just a distributed vs fixed kick weight --
                       # no reason to expect a different per-task cost)
     "E15SP": 0.02,
+    # Phase H1 (Annex B.1's E0 gate -- see the hybrid-campaign plan doc).
+    # Pure root-finding on the loss landscape, no agents/gossip/RNG at all
+    # -- cheaper even than NCP1 (0.02h), analogous treatment.
+    "E0": 0.01,
+    # Phase H2 (Annex B.1 remainder). E14RR is clique-scale like E7/E12b --
+    # same order of cost, no reason to expect otherwise until measured.
+    "E14RR": 0.01,
+    # Phase H3 (Annex B.2 protocol axis). E17 is analysis-only (reads H2's
+    # own pkls, no new tasks, no EXPERIMENT_HOURS entry needed). E16/E11H/
+    # E5H are NMH1-shaped hierarchy sweeps like their un-suffixed
+    # counterparts (E11/E5 above); E16's n_meas=2000 is ~2x NMH1's default
+    # 1000, so estimated at ~2x E11/E5's 0.5h pending an actual measurement.
+    # E15MB is clique-scale with NO local gradient steps at all (Type-N
+    # rounds only, <=10 rounds, m<=16) -- cheaper even than E7/E12b/E14RR,
+    # closer to E9's single-shot-aggregation cost.
+    "E16": 1.0,
+    "E11H": 0.5,
+    "E5H": 0.5,
+    "E15MB": 0.001,
 }
 
 # ---------------------------------------------------------------------------
@@ -278,6 +305,29 @@ def _clique_task(
     }
 
 
+def _multi_basin_task(
+    config,
+    experiment: str,
+    phase: Union[str, int],
+    results_root: Path,
+) -> Dict[str, Any]:
+    """MultiBasinConfig tasks (E15MB) -- no checkpointing: Type-N rounds
+    only, no local gradient steps, a handful of rounds on one clique (same
+    "seconds to run" class as _clique_task's E7/E12b, if not cheaper)."""
+    task_id = task_id_from_config(config)
+    pkl_path = str(results_root / "pkl" / experiment / f"{task_id}.pkl")
+    return {
+        "task_id": task_id,
+        "experiment": experiment,
+        "phase": phase,
+        "sim_type": "multi_basin_destruction",
+        "config": config_to_dict(config),
+        "checkpoint_every": 0,
+        "estimated_hours": EXPERIMENT_HOURS.get(experiment, 1.0),
+        "result_pkl_path": pkl_path,
+    }
+
+
 def _generic_task(
     config,
     experiment: str,
@@ -299,6 +349,22 @@ def _generic_task(
         "checkpoint_every": checkpoint_every if config.mode == "cascade" else 0,
         "estimated_hours": EXPERIMENT_HOURS.get(experiment, 1.0),
         "result_pkl_path": pkl_path,
+    }
+
+
+def _chord_task(config, phase: Union[str, int]) -> Dict[str, Any]:
+    """E0 is chord geometry only -- no simulation, no checkpoint, no pkl,
+    same treatment as _ncp1_task below."""
+    task_id = task_id_from_config(config)
+    return {
+        "task_id": task_id,
+        "experiment": "E0",
+        "phase": phase,
+        "sim_type": "chord_threshold_calibration",
+        "config": config_to_dict(config),
+        "checkpoint_every": 0,
+        "estimated_hours": EXPERIMENT_HOURS["E0"],
+        "result_pkl_path": None,
     }
 
 
@@ -713,6 +779,79 @@ def build_phase_tasks(
         for cfg in experiment_E8(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
             tasks.append(_ncp_task(cfg, "E8SP", phase, results_root))
 
+    # ── Phase H1 (Annex B.1's E0: the up-front falsifier) ───────────────────
+    # Gates every later H-phase (E7/E14 in H2 onward): see check_phaseh1.py /
+    # gateh1_review.json and the hybrid-campaign plan doc's discussion of why
+    # E0 is its own phase rather than folded into H2 alongside E7/E14.
+    elif phase == "h1":
+        for cfg in experiment_E0():
+            tasks.append(_chord_task(cfg, phase))
+
+    # ── Phase H2 (Annex B.1 remainder: E7 + E14RR) ──────────────────────────
+    # E7 is REUSED as-is (async_poisson, Type-P only per Annex B.1's own
+    # table -- E7 is not K-critical, it targets Lemma 3.1's ordinary
+    # depth-only fixation formula), scored against H1's measured
+    # vartheta_dagger table rather than recomputing chord_geometry
+    # (check_phaseh2.py). E14RR is the new round-ratio sweep (see its
+    # docstring for why it isn't named bare "E14"). gateh1_pass is checked
+    # but does not hard-block queue generation -- consistent with every
+    # other gate-chained phase in this file (e.g. gate1_pass never blocks
+    # Phase 2 either); it's a printed warning, with the hard-stop being a
+    # human/process check per check_phaseh1.py's own exit message.
+    elif phase == "h2":
+        if gate_results and not gate_results.get("gateh1_pass", True):
+            print(
+                "[warn] gateh1_pass is False -- H1's complementarity check "
+                "failed or produced no data; H2's E7/E14RR scoring against "
+                "H1's vartheta_dagger table will not be trustworthy until "
+                "that's resolved. Queuing anyway (see check_phaseh1.py)."
+            )
+
+        for cfg in experiment_E7(seeds=_seeds(50)):
+            tasks.append(_clique_task(cfg, "E7", phase, results_root))
+
+        for cfg in experiment_E14_round_ratio_sweep(seeds=_seeds(20)):
+            tasks.append(_clique_task(cfg, "E14RR", phase, results_root))
+
+    # ── Phase H3 (Annex B.2 protocol axis: E17, E16, E11H, E5H, E15MB) ──────
+    # Reads gateh2_review.json for K_low/K_mid/K_high (H2's measured H-round
+    # window) -- E11H/E5H sweep across that window rather than re-deriving
+    # K themselves. E17 is analysis-only and has NO task here: it reclassifies
+    # H2's own E14RR pkls post-hoc (see check_phaseh3.py). E15MB needs no K
+    # at all -- a pure Type-N-only mechanism comparison (barycentre vs
+    # label-plurality), independent of the Type-P channel.
+    elif phase == "h3":
+        if gate_results and gate_results.get("gateh2_K_low") is None:
+            print(
+                "[warn] gateh2_K_low is missing -- H2's E14RR round-ratio "
+                "sweep may have found no H-round window (Annex B.6's "
+                "falsification risk #2: 'the H-round window may be empty "
+                "at the default m'). Falling back to hardcoded K defaults; "
+                "widen H2's m/K_list and re-run before trusting H3's results."
+            )
+        K_low = gate_results.get("gateh2_K_low") or 1.0
+        K_mid = gate_results.get("gateh2_K_mid") or 10.0
+        K_high = gate_results.get("gateh2_K_high") or 100.0
+        K_window = [K_low, K_mid, K_high]
+
+        for cfg in experiment_E16(seeds=_seeds(20)):
+            tasks.append(_nc_task(cfg, "E16", phase, results_root))
+
+        # experiment_E11/E5 also regenerate their ORIGINAL (already queued
+        # in phase 6a) scheduling-only / sigma-only configs when called with
+        # no schedulings/sigma_list override -- filter to just the new
+        # hybrid arm so this phase doesn't duplicate phase 6a's queue.
+        for cfg in experiment_E11(hybrid_K_list=K_window, seeds=_seeds(30)):
+            if cfg.gossip_protocol == "hybrid":
+                tasks.append(_nc_task(cfg, "E11H", phase, results_root))
+
+        for cfg in experiment_E5(K_list=K_window, seeds=_seeds(30)):
+            if cfg.gossip_protocol == "hybrid":
+                tasks.append(_nc_task(cfg, "E5H", phase, results_root))
+
+        for cfg in experiment_E15MB(seeds=_seeds(20)):
+            tasks.append(_multi_basin_task(cfg, "E15MB", phase, results_root))
+
     return tasks
 
 
@@ -802,23 +941,39 @@ def load_gate_results(*paths: str) -> Dict[str, Any]:
     """Load and merge gate review JSON files.
 
     Each file's keys are prefixed with 'gate{N}_' where N is inferred from the
-    presence of 'gate1', 'gate2', 'gate3' in the filename.  Falls back to the
-    index order if the filename contains no such marker.
+    presence of 'gate1', 'gate2', 'gate3' in the filename (checked first, for
+    exact backward compatibility with the original phase-1-7 convention).
+    Anything else -- e.g. the letter-prefixed H-phase gates ("gateh1_review.
+    json", "gateh2_review.json") -- is matched by a general "gate<label>_"
+    regex instead of falling through to a purely positional "gate{i}_", so
+    passing --gateh1-results doesn't silently collide with --gate1-results'
+    "gate1_" prefix just because of argument order.
+
+    A key already starting with the target prefix is left as-is rather than
+    prefixed again: the H-phase gate scripts (check_phaseh1.py, check_
+    phaseh2.py, ...) write their OWN keys already self-prefixed
+    ("gateh1_pass", "gateh2_K_low", ...), unlike the original gate1-3
+    convention where only "gate{n}_pass" is self-prefixed and everything
+    else (e.g. "nmh3_regime_boundaries") is raw. Blindly prepending would
+    double the prefix on every self-prefixed key ("gateh2_gateh2_K_low"),
+    silently breaking every gate_results.get("gateh2_K_low", ...) lookup
+    downstream with no error -- just a quiet fall-back to the default.
     """
     merged: Dict[str, Any] = {}
     for i, path in enumerate(paths, start=1):
         with open(path) as fh:
             data = json.load(fh)
-        # Infer gate number from filename, e.g. "gate1_review.json" -> prefix "gate1_"
         fname = Path(path).name.lower()
+        prefix = None
         for n in (1, 2, 3):
             if f"gate{n}" in fname:
                 prefix = f"gate{n}_"
                 break
-        else:
-            prefix = f"gate{i}_"
+        if prefix is None:
+            m = re.search(r"(gate[a-z0-9]+)_", fname)
+            prefix = f"{m.group(1)}_" if m else f"gate{i}_"
         for k, v in data.items():
-            merged[f"{prefix}{k}"] = v
+            merged[k if k.startswith(prefix) else f"{prefix}{k}"] = v
     return merged
 
 
@@ -855,6 +1010,14 @@ def main() -> None:
     parser.add_argument("--gate1-results", type=str, default=None)
     parser.add_argument("--gate2-results", type=str, default=None)
     parser.add_argument("--gate3-results", type=str, default=None)
+    parser.add_argument(
+        "--gateh1-results", type=str, default=None,
+        help="Path to review/phaseh1/gateh1_review.json (phase h2's gate dependency).",
+    )
+    parser.add_argument(
+        "--gateh2-results", type=str, default=None,
+        help="Path to review/phaseh2/gateh2_review.json (phase h3's gate dependency).",
+    )
     args = parser.parse_args()
 
     # Normalise phase: "1" → "1a", "1sp" → "1sp", 1 → "1a"
@@ -868,7 +1031,10 @@ def main() -> None:
     results_dir = args.results_dir or Path(f"results/phase{phase_id}")
 
     gate_paths = [
-        p for p in [args.gate1_results, args.gate2_results, args.gate3_results]
+        p for p in [
+            args.gate1_results, args.gate2_results, args.gate3_results,
+            args.gateh1_results, args.gateh2_results,
+        ]
         if p is not None
     ]
     gate_results = load_gate_results(*gate_paths) if gate_paths else {}

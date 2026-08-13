@@ -54,6 +54,7 @@ from dssgd.protocols.gossip import (
     AsynchronousGossip,
     BoundedStalenessGossip,
     GossipAveraging,
+    HybridGossip,
     SynchronousPairwiseGossip,
 )
 from dssgd.topology.base import Topology
@@ -141,6 +142,15 @@ class CheckpointableRunner:
 
             config = CliqueFixationConfig(**self.task["config"])
             return run_clique_fixation_trial(config)
+
+        if sim_type == "multi_basin_destruction":
+            # No checkpointing: E15MB trials are Type-N rounds only (no
+            # local gradient steps), a handful of rounds on one clique --
+            # same "seconds to run" class as clique_fixation above.
+            from analysis.multi_basin_destruction import MultiBasinConfig, run_multi_basin_trial
+
+            config = MultiBasinConfig(**self.task["config"])
+            return run_multi_basin_trial(config)
 
         if sim_type == "generic_topology":
             # Checkpointing lives inside generic_topology_runner itself (a
@@ -262,13 +272,13 @@ class CheckpointableRunner:
         ml_topo = MultiLayerTopology({config.layer_name: topo})
         compositor = CoupledCompositor()
 
-        if config.track_provenance and config.gossip_protocol != "async_poisson":
+        if config.track_provenance and config.gossip_protocol not in ("async_poisson", "hybrid"):
             raise ValueError(
-                "track_provenance requires gossip_protocol='async_poisson' "
-                f"(event-level attribution is undefined for {config.gossip_protocol!r})"
+                "track_provenance requires gossip_protocol='async_poisson' or "
+                f"'hybrid' (event-level attribution is undefined for {config.gossip_protocol!r})"
             )
 
-        _async_nmh = config.gossip_protocol in ("async_poisson", "bounded_staleness")
+        _async_nmh = config.gossip_protocol in ("async_poisson", "bounded_staleness", "hybrid")
         if config.gossip_protocol == "async_poisson":
             per_step_rate = (
                 config.gossip_rate if config.gossip_rate is not None else float(n_agents)
@@ -298,11 +308,42 @@ class CheckpointableRunner:
             )
         elif config.gossip_protocol == "sync_neighbourhood":
             protocol = GossipAveraging()
+        elif config.gossip_protocol == "hybrid":
+            pairwise_rate = (
+                HybridGossip.pairwise_rate_for_K(config.round_ratio, config.epsilon_n_rounds)
+                if config.round_ratio is not None
+                else (config.gossip_rate if config.gossip_rate is not None else float(n_agents))
+            )
+            per_step_pairwise_rate = pairwise_rate / float(config.local_steps)
+            if config.track_provenance:
+                # Mirrors analysis/natural_cascade.py's run_natural_cascade_
+                # simulation "hybrid" branch exactly -- this is worker.py's
+                # separately-checkpointable copy of that same runner, and
+                # the two must not diverge (see gossip.py's HybridGossip.
+                # pairwise_protocol docstring for why event logging lives on
+                # the injected Type-P sub-protocol, not on HybridGossip
+                # itself).
+                inner_pairwise = ProvenanceAsyncGossip(
+                    rate=per_step_pairwise_rate, mode="poisson", alpha=config.gossip_alpha,
+                    rng=np.random.default_rng(config.seed + 42), leaf_assigns=assigns,
+                )
+                protocol = HybridGossip(
+                    pairwise_rate=per_step_pairwise_rate,
+                    epsilon_n_rounds=config.epsilon_n_rounds,
+                    pairwise_protocol=inner_pairwise,
+                )
+            else:
+                protocol = HybridGossip(
+                    pairwise_rate=per_step_pairwise_rate,
+                    epsilon_n_rounds=config.epsilon_n_rounds,
+                    alpha=config.gossip_alpha,
+                    rng=np.random.default_rng(config.seed + 42),
+                )
         else:
             raise ValueError(
                 f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
-                f"'async_poisson', 'sync_pairwise', 'sync_neighbourhood', or "
-                f"'bounded_staleness'."
+                f"'async_poisson', 'sync_pairwise', 'sync_neighbourhood', "
+                f"'bounded_staleness', or 'hybrid'."
             )
         _has_round_idx = hasattr(protocol, "round_idx")
 
@@ -769,6 +810,23 @@ def _restore_agent_params_ncp(
 # ---------------------------------------------------------------------------
 
 
+def run_chord_calibration_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    """E0 (Annex B.1): evaluate theory.chord_geometry at one (a, b, r) grid
+    point and return the complementarity check (2.7a) as a plain dict.
+    No agents, no gossip, no RNG -- cheap enough that this never needs
+    checkpointing or a pkl (mirrors run_ncp1_graph_only's treatment)."""
+    from analysis.chord_calibration import ChordCalibrationConfig, run_chord_calibration
+
+    cfg = ChordCalibrationConfig(**task["config"])
+    run = run_chord_calibration(cfg)
+    return {
+        "name": run.name, "a": run.a, "b": run.b, "r": run.r,
+        "lambda": run.lambda_, "vartheta_A_to_B": run.vartheta_A_to_B,
+        "vartheta_B_to_A": run.vartheta_B_to_A,
+        "complementarity_error": run.complementarity_error,
+    }
+
+
 def run_ncp1_graph_only(task: Dict[str, Any]) -> Dict[str, Any]:
     """Instantiate ForestFireTopology and return shell structure stats.
 
@@ -816,7 +874,7 @@ def run_ncp1_graph_only(task: Dict[str, Any]) -> Dict[str, Any]:
 def extract_result_summary(result, task: Dict[str, Any]) -> Dict[str, Any]:
     """Extract key observables for the JSONL summary line (no centroid_traj)."""
     sim_type = task["sim_type"]
-    if sim_type == "ncp_graph_only":
+    if sim_type in ("ncp_graph_only", "chord_threshold_calibration"):
         return result  # already a plain dict
 
     if sim_type == "natural_cascade":
@@ -844,6 +902,15 @@ def extract_result_summary(result, task: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "m": result.m, "j_seeds": result.j_seeds, "a": result.a, "b": result.b,
             "r": result.r, "fixed_at_B": result.fixed_at_B,
+        }
+
+    if sim_type == "multi_basin_destruction":
+        last = result.round_log[-1] if result.round_log else (False, None, None, False)
+        return {
+            "m": result.m, "n_wells": result.n_wells, "n_occupied": result.n_occupied,
+            "update_rule": result.update_rule,
+            "final_consensus_reached": last[0], "final_consensus_basin": last[1],
+            "final_mean_loss": last[2], "final_landed_in_unoccupied": last[3],
         }
 
     if sim_type == "generic_topology":
@@ -963,6 +1030,9 @@ def run_task(
         elif task["sim_type"] == "clique_fixation":
             from analysis.clique_fixation import CliqueFixationRun
             result = CliqueFixationRun.load(pkl_path)
+        elif task["sim_type"] == "multi_basin_destruction":
+            from analysis.multi_basin_destruction import MultiBasinRun
+            result = MultiBasinRun.load(pkl_path)
         else:
             result = NCPRun.load(pkl_path)
         return extract_result_summary(result, task)
@@ -970,6 +1040,8 @@ def run_task(
     sim_type = task["sim_type"]
     if sim_type == "ncp_graph_only":
         result = run_ncp1_graph_only(task)
+    elif sim_type == "chord_threshold_calibration":
+        result = run_chord_calibration_task(task)
     else:
         runner = CheckpointableRunner(task, checkpoint_dir,
                                       checkpoint_every=task.get("checkpoint_every", 50))

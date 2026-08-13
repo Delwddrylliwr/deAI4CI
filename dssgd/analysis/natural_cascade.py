@@ -26,6 +26,7 @@ from dssgd.protocols.gossip import (
     AsynchronousGossip,
     BoundedStalenessGossip,
     GossipAveraging,
+    HybridGossip,
     SynchronousPairwiseGossip,
 )
 from dssgd.topology.base import Topology
@@ -99,7 +100,9 @@ class NaturalCascadeConfig:
     layer_name: str = "social"
     # "async_poisson", "sync_pairwise" (SynchronousPairwiseGossip, Remark 4.3's
     # H-sched class), "sync_neighbourhood" (GossipAveraging, simultaneous m-way
-    # mean -- Lemma 6.1's basin-destroying mechanism), or "bounded_staleness".
+    # mean -- Lemma 6.1's basin-destroying mechanism), "bounded_staleness", or
+    # "hybrid" (HybridGossip, the two-jump Type-P+Type-N protocol of
+    # paper1_computing_hybrid_gossip.md Sec. 2.1 -- see round_ratio below).
     # See dssgd.protocols.gossip.protocol_suffix / gossip_mechanisms.md: the
     # bare "synchronous" string is retired -- it used to mean the m-way mean,
     # then briefly meant the pairwise class, an ambiguity that made "S"-suffixed
@@ -107,6 +110,19 @@ class NaturalCascadeConfig:
     gossip_protocol: str = "async_poisson"
     gossip_rate: Optional[float] = None     # None → auto-set to n_agents (see runner)
     gossip_alpha: float = 0.5               # initiator mixing weight toward the neighbour
+
+    # Hybrid protocol only (gossip_protocol="hybrid"): the round ratio K
+    # (eq. 2.2c). If set, overrides gossip_rate -- the per-round aggregate
+    # Type-P rate is derived from K via HybridGossip.pairwise_rate_for_K,
+    # exact for a single isolated clique (the calibration-ladder scope: E0,
+    # E7, E14 / phases H1-H2). None (default): fall back to gossip_rate (or
+    # n_agents), matching every other protocol's default when K isn't the
+    # thing being controlled (e.g. topology-scale experiments calibrating
+    # gossip_rate empirically instead -- see HybridGossip's docstring).
+    round_ratio: Optional[float] = None
+    # Type-N fires every this many rounds (1/epsilon_n in round units).
+    # Only consulted when gossip_protocol == "hybrid".
+    epsilon_n_rounds: int = 1
     # NMH-6 heterogeneous loss: one (a_i, b_i) per leaf; None = uniform
     per_leaf_loss_params: Optional[List[Tuple[float, float]]] = None
     t_horizon: int = 800           # round index used by cascade_size observable
@@ -306,10 +322,10 @@ def run_natural_cascade_simulation(
         )
         return Agent(agent_id, ModelRegistry({"model": entry}), loaders[agent_id])
 
-    if config.track_provenance and config.gossip_protocol != "async_poisson":
+    if config.track_provenance and config.gossip_protocol not in ("async_poisson", "hybrid"):
         raise ValueError(
-            "track_provenance requires gossip_protocol='async_poisson' "
-            f"(event-level attribution is undefined for {config.gossip_protocol!r})"
+            "track_provenance requires gossip_protocol='async_poisson' or "
+            f"'hybrid' (event-level attribution is undefined for {config.gossip_protocol!r})"
         )
 
     agents = [_make_agent(i) for i in range(n_agents)]
@@ -354,11 +370,46 @@ def run_natural_cascade_simulation(
         )
     elif config.gossip_protocol == "sync_neighbourhood":
         protocol = GossipAveraging()
+    elif config.gossip_protocol == "hybrid":
+        pairwise_rate = (
+            HybridGossip.pairwise_rate_for_K(config.round_ratio, config.epsilon_n_rounds)
+            if config.round_ratio is not None
+            else (config.gossip_rate if config.gossip_rate is not None else float(n_agents))
+        )
+        per_step_pairwise_rate = pairwise_rate / float(config.local_steps)
+        if config.track_provenance:
+            # Type-P sub-protocol gets the same event-level logging as the
+            # async_poisson path (see HybridGossip's pairwise_protocol
+            # docstring) -- Type-N never logs events (Lemma 2.4's clique
+            # round map has no per-kick provenance content), so this is the
+            # full two-axis instrumentation B.0.2 asks for at hierarchy
+            # scale: "did a GossipEvent happen" already distinguishes the
+            # jump type (always Type-P) from a flip with no recent event
+            # (Type-N-consolidated or Kramers escape).
+            inner_pairwise = ProvenanceAsyncGossip(
+                rate=per_step_pairwise_rate,
+                mode="poisson",
+                alpha=config.gossip_alpha,
+                rng=np.random.default_rng(config.seed + 42),
+                leaf_assigns=assigns,
+            )
+            protocol = HybridGossip(
+                pairwise_rate=per_step_pairwise_rate,
+                epsilon_n_rounds=config.epsilon_n_rounds,
+                pairwise_protocol=inner_pairwise,
+            )
+        else:
+            protocol = HybridGossip(
+                pairwise_rate=per_step_pairwise_rate,
+                epsilon_n_rounds=config.epsilon_n_rounds,
+                alpha=config.gossip_alpha,
+                rng=np.random.default_rng(config.seed + 42),
+            )
     else:
         raise ValueError(
             f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
-            f"'async_poisson', 'sync_pairwise', 'sync_neighbourhood', or "
-            f"'bounded_staleness'."
+            f"'async_poisson', 'sync_pairwise', 'sync_neighbourhood', "
+            f"'bounded_staleness', or 'hybrid'."
         )
     _has_round_idx = hasattr(protocol, "round_idx")
 
@@ -366,7 +417,10 @@ def run_natural_cascade_simulation(
     # Async: gossip fires after each gradient step (Poisson-calibrated rate gives
     # ~n_agents pairwise events total per round). Sync: one all-neighbour averaging
     # event per round, after all local gradient steps (preserves timescale separation).
-    _async = config.gossip_protocol in ("async_poisson", "bounded_staleness")
+    # Hybrid dispatches per-local-step too (its Type-P sub-step needs that
+    # granularity; its Type-N sub-step self-limits to once per round via the
+    # externally-set .round_idx, same convention bounded_staleness/provenance use).
+    _async = config.gossip_protocol in ("async_poisson", "bounded_staleness", "hybrid")
     for round_idx in range(config.n_warmup):
         if _has_round_idx:
             protocol.round_idx = round_idx

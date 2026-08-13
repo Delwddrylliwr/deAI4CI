@@ -654,12 +654,27 @@ def experiment_E5(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 1000,
+    K_list: Tuple[float, ...] = (),
+    epsilon_n_rounds: int = 5,
 ) -> List[NaturalCascadeConfig]:
     """sigma-sweep at fixed (a,b,epsilon): track_provenance=True so l_c
     (highest hierarchical distance still kick-attributed) can be computed
     post-hoc from the returned event log via provenance.crossover_stage.
-    async_poisson only -- event-level attribution is undefined for
-    synchronous gossip (natural_cascade.py raises if combined).
+
+    paper1_computing_hybrid_gossip.md Annex B.2's revised E5 ("sigma-sweep
+    at fixed (a,b,epsilon_p), repeated at three K; measure l_c... and the
+    widening of the attributable window at finite K, Rem. 3.7"): K_list=()
+    (default) reproduces the ORIGINAL single-protocol E5 exactly --
+    async_poisson only, phase 6a's existing call site is unaffected. Each K
+    in K_list adds a matched "E5H" arm at that round ratio over the SAME
+    (a,b,sigma,seed) grid, gossip_protocol="hybrid" with track_provenance=
+    True -- HybridGossip's Type-P sub-step gets the identical
+    ProvenanceAsyncGossip event logging the async_poisson arm uses (see
+    gossip.py's HybridGossip.pairwise_protocol / natural_cascade.py's
+    "hybrid" track_provenance branch), so l_c is measured identically
+    across the K axis and the async_poisson arm IS the K -> infinity
+    reference point Rem. 3.7's widening claim compares against -- not a
+    separate mechanism requiring a separate null.
     """
     configs = []
     for sigma in sigma_list:
@@ -671,6 +686,17 @@ def experiment_E5(
                 a=a, b=b, flip_noise_scale=sigma, force_flip_source=False,
                 track_provenance=True, gossip_protocol="async_poisson",
             ))
+    for K in K_list:
+        for sigma in sigma_list:
+            for seed in seeds:
+                configs.append(NaturalCascadeConfig(
+                    name=f"E5H/K={K}/sigma={sigma}/seed={seed}",
+                    depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                    n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                    a=a, b=b, flip_noise_scale=sigma, force_flip_source=False,
+                    track_provenance=True, gossip_protocol="hybrid",
+                    round_ratio=K, epsilon_n_rounds=epsilon_n_rounds,
+                ))
     return configs
 
 
@@ -839,6 +865,8 @@ def experiment_E11(
     local_steps: int = 50,
     n_warmup: int = 400,
     n_meas: int = 1000,
+    hybrid_K_list: Tuple[float, ...] = (),
+    epsilon_n_rounds: int = 5,
 ) -> List[NaturalCascadeConfig]:
     """Scheduling sweep at fixed (a,b,epsilon): (i) round-synchronous,
     (ii) free per-edge async, (iii) bounded-staleness at several staleness
@@ -848,6 +876,20 @@ def experiment_E11(
     subclasses via ProvenanceAsyncGossip -- bounded_staleness therefore runs
     WITHOUT provenance filtering here; the concavity/slope test on raw
     log2(T_flip) vs d is still meaningful, just not provenance-filtered).
+
+    paper1_computing_hybrid_gossip.md Annex B.2's revised E11 additionally
+    brackets (i)/(ii) with (iii) the two-jump protocol itself, "at three K
+    spanning the H-round window" (H2's measured K_low/K_mid/K_high, per
+    Remark 4.3's protocol paragraph: under the hybrid the immigration-driven
+    degradation should appear at LOW d rather than high d, the reversal
+    (3.4a) predicts). hybrid_K_list=() (default) reproduces the original
+    scheduling-only sweep exactly, unaffected for phase 6a's existing call
+    site. Each K in hybrid_K_list adds a gossip_protocol="hybrid" arm over
+    the same (a,b,seed) grid, prefixed "E11H" so it can't be confused by
+    name with the scheduling-only "E11" runs. track_provenance stays False
+    here (unlike E5): E11's own concavity/slope test reads raw
+    log2(T_flip) vs d from centroid_traj, exactly as its existing
+    bounded_staleness entries already do "without provenance filtering."
     """
     configs = []
     for protocol, staleness in schedulings:
@@ -861,6 +903,71 @@ def experiment_E11(
                     gossip_protocol=protocol, staleness_bound=staleness,
                     track_provenance=(protocol == "async_poisson"),
                 ))
+    for K in hybrid_K_list:
+        for a in a_list:
+            for seed in seeds:
+                configs.append(NaturalCascadeConfig(
+                    name=f"E11H/K={K}/a={a}/seed={seed}",
+                    depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                    n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                    a=a, b=b, force_flip_source=True, flip_noise_scale=0.0,
+                    gossip_protocol="hybrid", round_ratio=K, epsilon_n_rounds=epsilon_n_rounds,
+                ))
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# E16: Cross-module ceiling for the Type-N channel (Proposition 4.10)
+# ---------------------------------------------------------------------------
+
+
+def experiment_E16(
+    p_list: List[float] = (0.5, 2.0, 8.0, 32.0),
+    a: float = 0.5,
+    b: float = 0.02,  # fixed lambda -- b is in both E0's and E7's shared grid
+    seeds: List[int] = tuple(range(20)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 2000,  # "long horizons" (Annex B.2's E16 design sketch)
+) -> List[NaturalCascadeConfig]:
+    """Annex B.2's E16: ceiling location (Proposition 4.10, eq. 4.9).
+    "Type-N rounds only, no Type-P channel; sweep p... at fixed
+    vartheta_dagger (via fixed lambda from E0); measure the highest level
+    ever crossed over long horizons." Realised as gossip_protocol="hybrid"
+    with round_ratio=0.0 -- HybridGossip.pairwise_rate_for_K(0, ...) == 0.0
+    exactly, so the Type-P sub-protocol's Poisson rate is genuinely zero
+    (AsynchronousGossip.execute with rate=0 always draws 0 events; this is
+    the SAME mechanism/logging path every other H-phase experiment uses,
+    not a separate sync_neighbourhood special case -- deliberately, so a
+    ceiling measured here is directly comparable to E11H/E5H's K axis
+    rather than a structurally different run).
+
+    force_flip_source=True (propagation test, matching E6/E11/E13's
+    convention): Proposition 4.10's ceiling question is "how far does an
+    ALREADY-ARISEN innovation get under Type-N alone", not origination.
+
+    Annex B.2's own note on the default: "at p=2, vartheta_dagger=1/2,
+    (4.9) gives l_theta=0 -- the ceiling is ABSENT rather than LOCATED."
+    p_list's default already includes p=8,32 to move l_theta into {1,2} and
+    make the prediction quantitative rather than a null; scoring
+    (check_phaseh3.py) should read off the highest hierarchical distance
+    any leaf ever flipped to, per seed, via nmh_observables.cascade_depth,
+    and compare against theory's l_theta at each swept p.
+    """
+    prefix = "E16"
+    configs = []
+    for p in p_list:
+        for seed in seeds:
+            configs.append(NaturalCascadeConfig(
+                name=f"{prefix}/p={p}/seed={seed}",
+                depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                a=a, b=b, force_flip_source=True, flip_noise_scale=0.0,
+                gossip_protocol="hybrid", round_ratio=0.0, epsilon_n_rounds=1,
+            ))
     return configs
 
 

@@ -1,0 +1,33 @@
+{
+  "run_parametrization": {
+    "phase1_results": "results\\phase1sn",
+    "queue_dir": "queue\\phase1sn",
+    "suffix": "SN",
+    "gossip_protocol": "sync_neighbourhood",
+    "output_dir": "review\\phase1sn"
+  },
+  "nmh1_slopes": {},
+  "nmh1_slope_ses": {},
+  "slope_confirmed": false,
+  "nmh3_regime_boundaries": {
+    "I_II": null,
+    "II_III": null
+  },
+  "nmh7_pilot_warmup_ok_rate": null,
+  "ncp1_shell_scaling": {},
+  "ncp1_gamma_estimate": null,
+  "ncp1_gamma_r_squared": null,
+  "recommended_b_values": [
+    0.02,
+    0.025,
+    0.03,
+    0.035,
+    0.04,
+    0.045,
+    0.05
+  ],
+  "gate1_pass": false,
+  "n_tasks_completed": 0,
+  "n_tasks_failed": 0,
+  "notes": "Slope-1 not confirmed \u2014 check local_steps or Regime C conditions."
+}

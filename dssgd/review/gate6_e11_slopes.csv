@@ -1,0 +1,6 @@
+protocol,staleness_bound,slope,n_distances
+async_poisson,0,0.5396417875307961,4
+bounded_staleness,2,0.46525637086915944,4
+bounded_staleness,5,0.4395136322543431,4
+bounded_staleness,10,0.41939922278770486,4
+synchronous,0,1.0608948409511465,4

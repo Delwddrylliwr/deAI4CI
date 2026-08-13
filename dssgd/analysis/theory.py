@@ -528,3 +528,132 @@ def fixation_probability(j: int, m: int, rho: float) -> float:
     if math.isclose(rho, 1.0, abs_tol=1e-9):
         return j / m
     return (1.0 - rho ** j) / (1.0 - rho ** m)
+
+
+# ---------------------------------------------------------------------------
+# Hybrid (two-jump) protocol: Lemma 3.1' / Corollary 3.1'' (eq. 3.2a-3.2d)
+# ---------------------------------------------------------------------------
+
+
+def vartheta_dagger(a: float, b: float, delta_norm: float = 1.0, r: float = 1.0) -> float:
+    """The favoured-direction threshold vartheta_dagger(lambda) :=
+    vartheta_{A->B}(lambda) (Lemma 2.1'): the chord fraction an A-worker
+    must receive to cross into B. Complementarity (2.7a) makes the reverse
+    threshold 1 - vartheta_dagger, so this single value is all Lemma 2.4's
+    clique-round threshold n_dagger needs.
+    """
+    geom = chord_geometry(a, b, delta_norm, r=r)
+    return geom["vartheta_A_to_B"]
+
+
+def n_dagger(m: int, vartheta_dagger_val: float) -> int:
+    """Lemma 3.1' notation n^dagger := ceil(vartheta_dagger(lambda) * m):
+    the round-threshold a clique's B-count must clear for Lemma 2.4's
+    Type-N round map (eq. 2.9) to absorb it into all-B rather than all-A."""
+    if not (0.0 <= vartheta_dagger_val <= 1.0):
+        raise ValueError(f"vartheta_dagger_val must be in [0,1], got {vartheta_dagger_val}")
+    return math.ceil(vartheta_dagger_val * m)
+
+
+def fixation_probability_hybrid(j: int, m: int, rho: float, a: float, b: float,
+                                 delta_norm: float = 1.0, r: float = 1.0,
+                                 vartheta_dagger_val: Optional[float] = None) -> float:
+    """q_hyb(j; m, rho, K)'s ruin factor q_ruin(j) (Lemma 3.1', eq. 3.2a-3.2b):
+    ordinary gambler's-ruin fixation against the NEARER absorbing barrier
+    n_dagger = ceil(vartheta_dagger(lambda) * m) rather than the full clique
+    m -- i.e. fixation_probability(j, n_dagger, rho), reusing Lemma 3.1's
+    formula with the round-threshold target Lemma 2.4 supplies.
+
+    This is q_ruin(j) alone, NOT the full q_hyb = q_ruin(j) * Pr(T_hit <= K
+    | hit): the conditional hit-time law is left open by the paper itself
+    (Sec. 9 item 8, "the deadline factor... only to leading order"), so
+    there is no closed form for the K-dependent factor here. q_hyb ~=
+    q_ruin(j) exactly when K clears detection_floor's K_min (below); well
+    below it, q_hyb is deadline-suppressed toward 0 regardless of q_ruin.
+    j is clamped to n_dagger (j seeds beyond the round threshold already
+    guarantee absorption at B, matching Lemma 2.4's projection).
+
+    vartheta_dagger_val: if given, used directly instead of recomputing
+    vartheta_dagger(a, b, ...) from chord_geometry -- for callers scoring
+    against a MEASURED table (e.g. the H1 calibration gate's
+    gateh1_vartheta_dagger_table) who want the comparison to depend only on
+    that measured value, not on a second, independent chord_geometry call
+    that happens to agree with it. a/b are still required (rho's own
+    provenance may depend on them) even when this is set.
+    """
+    vd = vartheta_dagger_val if vartheta_dagger_val is not None else vartheta_dagger(a, b, delta_norm, r=r)
+    nd = n_dagger(m, vd)
+    return fixation_probability(min(j, nd), nd, rho)
+
+
+def detection_floor(m: int, rho: float, p_plus: float, p_minus: float) -> float:
+    """Corollary 3.1'' (eq. 3.2d): the round ratio K above which the hybrid
+    protocol resolves an innovation of bias rho -- q_hyb(1) = Theta(q_ruin(1))
+    -- rather than being deadline-suppressed by Type-N's per-round reset:
+
+        K_min ~ m * log(m) / [(1 - rho) * (p_plus + p_minus)]
+
+    A scaling-form bound, not an exact threshold -- matching the paper's own
+    "~" status for (3.2d) (see fixation_probability_hybrid's docstring on
+    the open exact-deadline-factor problem, Sec. 9 item 8). Callers compare
+    their swept K against this: K >> K_min should sit near the q_ruin(1)
+    plateau; K << K_min should be deadline-suppressed toward 0 (this is the
+    E14/H2 calibration-ladder's two-sided test, per Annex B.1's "either
+    bound alone is consistent with a monotone trend").
+
+    rho=1 (unbiased, lambda=0) returns inf, matching the paper's statement
+    that an unbiased basin only crosses when K = Theta~(m^2), not at any
+    finite floor derived from (1 - rho).
+    """
+    if m <= 1:
+        raise ValueError(f"m must be > 1, got {m}")
+    if math.isclose(rho, 1.0, abs_tol=1e-12) or (p_plus + p_minus) <= 0.0:
+        return math.inf
+    return (m * math.log(m)) / ((1.0 - rho) * (p_plus + p_minus))
+
+
+def cross_module_ceiling(p: float, vartheta_dagger_val: float) -> float:
+    """Proposition 4.10 (eq. 4.9): l_theta, the highest hierarchical level
+    the Type-N channel alone can ever cross (uniform neighbourhood weights,
+    NMH wiring). Above l_theta no configuration of the sibling supermodule
+    -- including full commitment to the favoured basin -- can carry a
+    boundary worker across its threshold via Type-N alone, at any horizon:
+
+        l_theta = log2( p / (vartheta_dagger * (1 + p/2)) ) - 1
+
+    Not floored/ceiled here -- callers compare a measured integer "highest
+    level ever crossed" (e.g. nmh_observables.cascade_depth under
+    round_ratio=0.0, Experiment E16) against floor(l_theta) or just the
+    sign/magnitude of this real-valued quantity, since (4.9)'s own
+    derivation is a continuous inequality in l before the "no cross-module
+    level transmits" conclusion is read off it.
+
+    At p=2 (this repo's Safari default) with symmetric basins
+    (vartheta_dagger=0.5), this evaluates to l_theta < 1 (in fact exactly
+    log2(2) - 1 = 0): "no cross-module level transmits at all" -- the
+    paper's own flagged degenerate case (Annex B.2's E16 design note).
+    """
+    if not (0.0 < vartheta_dagger_val <= 1.0):
+        raise ValueError(f"vartheta_dagger_val must be in (0,1], got {vartheta_dagger_val}")
+    if p <= 0.0:
+        raise ValueError(f"p must be > 0, got {p}")
+    return math.log2(p / (vartheta_dagger_val * (1.0 + p / 2.0))) - 1.0
+
+
+def kick_success_probabilities_distributed(
+    a: float, b: float, delta_norm: float = 1.0, r: float = 1.0,
+    kick_weight_cdf: Callable[[float], float] = uniform_kick_cdf,
+) -> Tuple[float, float]:
+    """(p_plus, p_minus) under a continuous kick-weight law mu_C (eq. 3.1) --
+    the same quantities fixation_bias_distributed collapses into their ratio
+    rho, exposed separately here because detection_floor (3.2d) needs the
+    SUM p_plus + p_minus, not just the ratio. Mirrors
+    fixation_bias_distributed's internals exactly; kept as a separate
+    function rather than changing that one's return type, since
+    fixation_bias_distributed's callers already depend on it returning a
+    bare rho.
+    """
+    geom = chord_geometry(a, b, delta_norm, r=r)
+    p_plus = 1.0 - kick_weight_cdf(geom["vartheta_A_to_B"])
+    p_minus = 1.0 - kick_weight_cdf(geom["vartheta_B_to_A"])
+    return p_plus, p_minus

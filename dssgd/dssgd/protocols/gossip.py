@@ -41,6 +41,73 @@ class GossipAveraging(Protocol):
             agent.aggregate(comm_round, neighbour_states, mixing_weights)
 
 
+class LabelPluralityGossip(Protocol):
+    """Type-N neighbourhood update using the label-plurality repair (eq.
+    6.2, Remark 6.4) instead of the parameter-space barycentre GossipAveraging
+    implements (eq. 2.2b): each agent's post-round state is snapped to the
+    basin CENTRE that wins a weighted majority vote of its neighbourhood's
+    current basin labels, rather than a weighted average of raw parameter
+    vectors. Coincides with GossipAveraging's result in the two-basin case
+    (Remark 6.4: "coincides with (2.2b) in the two-basin case," since the
+    barycentre already lies on the same chord the vote's threshold reads);
+    the repair only matters once three or more basins are occupied within a
+    single neighbourhood, where GossipAveraging's barycentre generically
+    lands in NO occupied basin (Lemma 6.1 / Annex D.9) while this stays on
+    the occupied set by construction (Experiment E15MB).
+
+    Basin membership is a NEAREST-CENTRE classification against
+    `basin_centers` (not a chord-threshold rule -- that's specific to the
+    two-well family of Sec. 2.4 and doesn't generalise to M>=3 basins
+    without picking a specific geometry; nearest-centre is the natural,
+    geometry-agnostic generalisation and reduces to a chord threshold at
+    M=2 with symmetric placement). Ties in the vote are broken by lowest
+    basin index (deterministic, matching Lemma 2.4's "ties... resolved by
+    convention").
+    """
+
+    def __init__(
+        self,
+        basin_centers: List["torch.Tensor"],
+        state_key: str = "model",
+        param_name: str = "theta",
+    ):
+        self.basin_centers = list(basin_centers)
+        self.state_key = state_key
+        self.param_name = param_name
+
+    def _classify(self, state) -> int:
+        vec = state[self.state_key][self.param_name]
+        dists = [float(((vec - c) ** 2).sum()) for c in self.basin_centers]
+        return min(range(len(dists)), key=lambda i: dists[i])
+
+    def execute(self, comm_round: CommunicationRound, agents: List[Agent]):
+        all_states = {
+            a.id: a.get_state(comm_round.state_keys, comm_round.param_mask)
+            for a in agents
+        }
+        labels = {aid: self._classify(s) for aid, s in all_states.items()}
+
+        for agent in agents:
+            neighbours = list(comm_round.graph.neighbors(agent.id))
+            participants = neighbours + [agent.id]
+            vote: dict = {}
+            for j in participants:
+                if j not in labels:
+                    continue
+                w = float(comm_round.W[agent.id, j])
+                vote[labels[j]] = vote.get(labels[j], 0.0) + w
+            if not vote:
+                continue
+            # max() keeps the FIRST maximum seen when iterating an
+            # ascending-sorted key list, i.e. the lowest basin index among
+            # ties -- the deterministic tie-break the docstring promises.
+            winning_basin = max(sorted(vote.keys()), key=lambda b: vote[b])
+            synthetic_state = {
+                self.state_key: {self.param_name: self.basin_centers[winning_basin]}
+            }
+            agent.aggregate(comm_round, {agent.id: synthetic_state}, {agent.id: 1.0})
+
+
 class AllReduce(Protocol):
     """Synchronous all-reduce baseline: every agent sees every other agent with equal weight."""
 
@@ -379,6 +446,155 @@ class SynchronousPairwiseGossip(Protocol):
             )
 
 
+class HybridGossip(Protocol):
+    """The two-jump protocol (gossip_protocol="hybrid", suffix "H";
+    paper1_computing_hybrid_gossip.md Sec. 2.1): continuous Poisson Type-P
+    pairwise kicks (AsynchronousGossip's mechanics) running simultaneously
+    with periodic Type-N neighbourhood-averaging rounds (GossipAveraging's
+    mechanics) every `epsilon_n_rounds` rounds. This is a genuinely new
+    mechanism, not a CompositeProtocol wrapping the two existing classes:
+    CompositeProtocol runs its sub-protocols once per `execute()` call
+    (i.e. once per local step under async-style dispatch), which would fire
+    Type-N every local step rather than every `epsilon_n_rounds`-th ROUND.
+    HybridGossip tracks round boundaries itself (via the same externally-set
+    `.round_idx` convention BoundedStalenessGossip/ProvenanceAsyncGossip use)
+    so Type-N fires exactly once per qualifying round regardless of how many
+    times `execute()` is called within it.
+
+    K (the round ratio, eq. 2.2c) is the expected number of Type-P events a
+    level-0 module experiences per Type-N round:
+        K = epsilon_p * C(clique_size, 2) / epsilon_n
+    This class does not take K directly -- it takes `pairwise_rate`, the
+    aggregate per-round Type-P event rate for whatever graph it's run on
+    (matching AsynchronousGossip.rate's existing network-wide-mean
+    convention, not a true per-edge epsilon_p). For a SINGLE isolated clique
+    (E0/E7/E14's calibration-ladder scope, where "network-wide" and
+    "within-module" coincide), `pairwise_rate_for_K` gives the exact
+    `pairwise_rate` realising a target K; for multi-module hierarchies the
+    relationship between a network-wide `pairwise_rate` and per-level K is
+    the level-wise decomposition of Theorem 4.1, not a single scalar, so
+    callers there must calibrate `pairwise_rate` empirically (this is why
+    Annex B's topology-axis experiments take K as a measured input from the
+    calibration ladder rather than re-deriving it).
+
+    Parameters
+    ----------
+    pairwise_rate : float
+        Expected number of Type-P events per ROUND (not per local step --
+        callers dividing by `local_steps` for per-step dispatch, as
+        AsynchronousGossip's callers already do, must do so before passing
+        the rate here). Passed straight through as `AsynchronousGossip.rate`.
+        Ignored if `pairwise_protocol` is given.
+    epsilon_n_rounds : int
+        Type-N fires every this many rounds (>= 1). This is 1/epsilon_n in
+        round units; there is no direct `epsilon_n` constructor argument
+        because the discretised simulation only has an integer round clock.
+    alpha, alpha_sampler, rng : as AsynchronousGossip. Ignored if
+        `pairwise_protocol` is given.
+    pairwise_protocol : AsynchronousGossip, optional
+        A pre-built Type-P sub-protocol to use in place of a freshly
+        constructed AsynchronousGossip -- e.g. a `ProvenanceAsyncGossip`
+        instance, so HybridGossip's Type-P channel gets the exact same
+        event-level provenance logging as the pure-async_poisson path
+        (B.0.2's "two-axis provenance," the jump-type axis being which
+        channel called `execute` -- Type-P always goes through this
+        sub-protocol, Type-N never logs events, so "did this GossipEvent
+        happen" already IS the jump-type axis without a separate field).
+        Any caller-set `.round_idx` is forwarded to it every round (see
+        the `round_idx` property below), matching the convention
+        ProvenanceAsyncGossip itself expects.
+    """
+
+    def __init__(
+        self,
+        pairwise_rate: float,
+        epsilon_n_rounds: int,
+        alpha: float = 0.5,
+        alpha_sampler: Optional[Callable[[], float]] = None,
+        rng: Optional[np.random.Generator] = None,
+        pairwise_protocol: Optional[AsynchronousGossip] = None,
+    ):
+        if epsilon_n_rounds < 1:
+            raise ValueError(f"epsilon_n_rounds must be >= 1, got {epsilon_n_rounds}")
+        self.epsilon_n_rounds = epsilon_n_rounds
+        self._pairwise = pairwise_protocol if pairwise_protocol is not None else AsynchronousGossip(
+            rate=pairwise_rate, mode="poisson", alpha=alpha,
+            alpha_sampler=alpha_sampler, rng=rng,
+        )
+        self._neighbourhood = GossipAveraging()
+        self._round_idx: int = 0
+        self._last_neighbourhood_round: Optional[int] = None
+
+    @property
+    def rng(self) -> np.random.Generator:
+        return self._pairwise.rng
+
+    @property
+    def round_idx(self) -> int:
+        return self._round_idx
+
+    @round_idx.setter
+    def round_idx(self, value: int) -> None:
+        self._round_idx = value
+        # Forward to the Type-P sub-protocol iff it tracks its own round_idx
+        # (i.e. it's a ProvenanceAsyncGossip / BoundedStalenessGossip-style
+        # instance, not a plain AsynchronousGossip, which has no such
+        # attribute) -- this is what lets an injected ProvenanceAsyncGossip
+        # log events under the right round without HybridGossip needing to
+        # know it's provenance-tracked.
+        if hasattr(self._pairwise, "round_idx"):
+            self._pairwise.round_idx = value
+
+    @property
+    def events(self):
+        """Passthrough to the Type-P sub-protocol's event log, iff it has
+        one (a ProvenanceAsyncGossip pairwise_protocol was supplied).
+        Type-N events are never logged: Lemma 2.4's clique-consensus round
+        map has no cross-boundary "which leaf did this come from" content
+        the way a single Type-P kick does, so there is nothing analogous to
+        attribute -- the two-axis provenance's jump-type axis is realised as
+        "this event exists" (always Type-P) rather than a stored field."""
+        return getattr(self._pairwise, "events", None)
+
+    def execute(self, comm_round: CommunicationRound, agents: List[Agent]):
+        # Fire Type-N at most once per qualifying round, on the first
+        # execute() call seen for that round_idx -- callers set .round_idx
+        # once per round (same convention as BoundedStalenessGossip) then
+        # call execute() once per local step, so this guard is what turns
+        # "called local_steps times" into "Type-N fires once."
+        #
+        # Qualifying rounds are (round_idx + 1) % epsilon_n_rounds == 0, NOT
+        # round_idx % epsilon_n_rounds == 0: the paper's periodic clock
+        # {R_s} is indexed from s=1 (eq. 2.2b), i.e. the first tick happens
+        # after one full period has elapsed, not immediately at round 0 --
+        # round_idx % epsilon_n_rounds == 0 is true at round_idx=0 for EVERY
+        # epsilon_n_rounds (0 mod anything is 0), which would fire Type-N on
+        # the very first round regardless of how large epsilon_n_rounds is,
+        # silently breaking the K -> infinity (pure Type-P) limit.
+        if (
+            (self.round_idx + 1) % self.epsilon_n_rounds == 0
+            and self._last_neighbourhood_round != self.round_idx
+        ):
+            self._neighbourhood.execute(comm_round, agents)
+            self._last_neighbourhood_round = self.round_idx
+        self._pairwise.execute(comm_round, agents)
+
+    @staticmethod
+    def pairwise_rate_for_K(K: float, epsilon_n_rounds: int) -> float:
+        """The network-wide per-round `pairwise_rate` giving K expected
+        Type-P events per Type-N round period (eq. 2.2c), exact for a SINGLE
+        isolated module where the module's aggregate Type-P rate
+        (epsilon_p * C(m,2)) IS the network-wide rate. Since
+        epsilon_n_rounds = 1/epsilon_n in round units, K = pairwise_rate *
+        epsilon_n_rounds, i.e. pairwise_rate = K / epsilon_n_rounds -- this
+        does not depend on clique size m separately because pairwise_rate
+        already aggregates over all C(m,2) edges of the clique.
+        """
+        if epsilon_n_rounds < 1:
+            raise ValueError(f"epsilon_n_rounds must be >= 1, got {epsilon_n_rounds}")
+        return K / epsilon_n_rounds
+
+
 def make_uniform_alpha_sampler(rng: Optional[np.random.Generator] = None) -> Callable[[], float]:
     """Kick-weight sampler drawing a fresh alpha ~ Uniform(0,1) each call --
     the simulation-side counterpart to theory.uniform_kick_cdf /
@@ -434,6 +650,7 @@ PROTOCOL_SUFFIXES = {
     "async_poisson": "",
     "sync_pairwise": "SP",
     "sync_neighbourhood": "SN",
+    "hybrid": "H",
 }
 
 
@@ -465,6 +682,7 @@ SUFFIX_TO_PROTOCOL = {
     "": "async_poisson",
     "SP": "sync_pairwise",
     "SN": "sync_neighbourhood",
+    "H": "hybrid",
 }
 
 
