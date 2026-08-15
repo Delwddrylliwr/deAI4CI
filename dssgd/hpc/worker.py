@@ -45,7 +45,7 @@ _HERE = Path(__file__).parent.parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from analysis.natural_cascade import NaturalCascadeRun
+from analysis.natural_cascade import NaturalCascadeRun, build_nmh_topology_with_retry
 from analysis.ncp_runner import NCPRun, compute_shell_trajs
 from dssgd.compositor.compositors import CoupledCompositor
 from dssgd.nodes.agent import Agent
@@ -211,25 +211,11 @@ class CheckpointableRunner:
         assigns = leaf_assignments(n_agents, config.leaf_size)
 
         graph_seed = config.graph_seed if config.graph_seed is not None else config.seed
-        if config.overlap_level is not None:
-            topo: Topology = OverlappingModularTopology(
-                branching=config.branching,
-                depth=config.depth,
-                leaf_size=config.leaf_size,
-                p=config.p,
-                overlap_level=config.overlap_level,
-                delta_in=config.delta_in,
-                n_overlap=config.n_overlap,
-                seed=graph_seed,
-            )
-        else:
-            topo = NestedModularTopology(
-                branching=config.branching,
-                depth=config.depth,
-                leaf_size=config.leaf_size,
-                p=config.p,
-                seed=graph_seed,
-            )
+        topo: Topology = build_nmh_topology_with_retry(
+            branching=config.branching, depth=config.depth, leaf_size=config.leaf_size,
+            p=config.p, seed=graph_seed, overlap_level=config.overlap_level,
+            delta_in=config.delta_in, n_overlap=config.n_overlap,
+        )
         if config.sever_min_distance is not None:
             topo = SeveredTopology(topo, assigns, config.sever_min_distance)
 

@@ -700,6 +700,84 @@ def experiment_E5(
     return configs
 
 
+def experiment_E5Hv2(
+    sigma_list: List[float] = (0.1, 0.15, 0.2, 0.25, 0.3, 0.4),
+    K_list: Tuple[float, ...] = (),
+    a: float = 2.0,
+    b: float = 0.042,
+    seeds: List[int] = tuple(range(30)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    p: float = 2.0,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 1000,
+    epsilon_n_rounds: int = 5,
+) -> List[NaturalCascadeConfig]:
+    """E5H, re-parameterised: H3's real run of experiment_E5's K_list arm
+    ("E5H") came back with an EMPTY crossover table -- zero flips in 540/540
+    runs, at every K and every sigma up to 0.05 (E5's original sigma_list
+    ceiling). Confirmed this is not hybrid-specific: the pre-existing,
+    unrelated original async_poisson E5 arm (results/phase6a/pkl/E5, 180
+    runs) shows the SAME zero-flips-at-every-sigma result, and gate6_review
+    .json's own e5_crossover has always been [] -- this predates the hybrid
+    work and was never gated or flagged.
+
+    Root cause, quantified: at a=2.0, b=0.042, chord_geometry gives a saddle
+    distance of ~0.436 from theta_A (chord length 1.0). The noise mechanism
+    (natural_cascade.py's flip_noise_scale) adds INDEPENDENT N(0, sigma^2)
+    noise to each agent separately, once per measurement round; the leaf-
+    level centroid basin classification (nmh_observables/active_escape's
+    find_t_flip) tracks the MEAN across a leaf's leaf_size agents, whose
+    effective noise std is sigma/sqrt(leaf_size) -- at leaf_size=4, sigma/2.
+    Crossing the 0.436 saddle distance therefore needs roughly a
+    (2*0.436/sigma)-effective-sigma event. At the original ceiling sigma=
+    0.05 that's an ~17-effective-sigma event (astronomically improbable);
+    empirically (local calibration at depth=2/n_meas=100/local_steps=10,
+    3 seeds/point) sigma=0.05/0.1/0.15 gave 0/3 seeds with any flip while
+    sigma=0.2/0.3 gave 3/3 -- the working threshold sits between 0.15 and
+    0.2, consistent with the leaf-averaged distance estimate. sigma_list's
+    new default spans that transition (0.1, 0.15 as below-threshold
+    controls; 0.2 upward as the working range) rather than sitting entirely
+    below it.
+
+    K_list=() (default) reproduces the async_poisson-only sweep at the NEW
+    sigma range; each K in K_list adds the matched hybrid ("E5Hv2") arm,
+    identically to experiment_E5's K_list mechanism. a/b/p/depth/leaf_size
+    are unchanged from experiment_E5's defaults deliberately: Lemma 2.1's
+    scale invariance means the saddle's CHORD-FRACTION location is
+    unaffected by curvature, so only sigma needed to move, not the
+    landscape itself -- keeping (a,b) fixed means this remains the same
+    physical comparison point E11H/E16v2 and the rest of the K-axis
+    campaign share.
+    """
+    prefix_async = "E5v2"
+    prefix_hybrid = "E5Hv2"
+    configs = []
+    for sigma in sigma_list:
+        for seed in seeds:
+            configs.append(NaturalCascadeConfig(
+                name=f"{prefix_async}/sigma={sigma}/seed={seed}",
+                depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                a=a, b=b, flip_noise_scale=sigma, force_flip_source=False,
+                track_provenance=True, gossip_protocol="async_poisson",
+            ))
+    for K in K_list:
+        for sigma in sigma_list:
+            for seed in seeds:
+                configs.append(NaturalCascadeConfig(
+                    name=f"{prefix_hybrid}/K={K}/sigma={sigma}/seed={seed}",
+                    depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                    n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                    a=a, b=b, flip_noise_scale=sigma, force_flip_source=False,
+                    track_provenance=True, gossip_protocol="hybrid",
+                    round_ratio=K, epsilon_n_rounds=epsilon_n_rounds,
+                ))
+    return configs
+
+
 # ---------------------------------------------------------------------------
 # E6 / E12(a): Level-matching filter and overfitting-as-low-generality
 # ---------------------------------------------------------------------------
@@ -958,6 +1036,61 @@ def experiment_E16(
     and compare against theory's l_theta at each swept p.
     """
     prefix = "E16"
+    configs = []
+    for p in p_list:
+        for seed in seeds:
+            configs.append(NaturalCascadeConfig(
+                name=f"{prefix}/p={p}/seed={seed}",
+                depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                a=a, b=b, force_flip_source=True, flip_noise_scale=0.0,
+                gossip_protocol="hybrid", round_ratio=0.0, epsilon_n_rounds=1,
+            ))
+    return configs
+
+
+def experiment_E16v2(
+    p_list: List[float] = (0.5, 2.0, 8.0, 32.0),
+    a: float = 0.5,
+    b: float = 0.02,
+    seeds: List[int] = tuple(range(20)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 2000,
+) -> List[NaturalCascadeConfig]:
+    """E16, re-issued under a new name rather than re-run under the same one
+    -- H3's real run of `experiment_E16` found p=0.5 disconnects ~80% of the
+    time for this (branching=2, depth=5, leaf_size=4) shape (16/20 seeds
+    failed with `NestedModularTopology(...) produced a disconnected graph`),
+    so its surviving 4-seed p=0.5 sample is survivorship-biased toward
+    atypically well-connected draws, not a fair sample of "what happens at
+    p=0.5." `build_nmh_topology_with_retry` (analysis/natural_cascade.py)
+    now retries with a perturbed graph seed on exactly that failure, giving
+    every seed here a fair shot at a full, unbiased 20-seed sample --- but
+    reusing the bare "E16" name for data collected under a different (now
+    bug-fixed) topology-construction policy would silently conflate two
+    different samples under one label, exactly the kind of ambiguity
+    gossip_mechanisms.md's "S" retirement and this campaign's own E14/E14RR,
+    E15/E15MB splits were built to avoid. Identical to `experiment_E16` in
+    every parameter (p=2/8/32 arms are bit-for-bit reproducible against the
+    original run, since attempt=0 always succeeds immediately there with the
+    unperturbed seed) -- only the topology-construction robustness differs.
+
+    Scoring should ALSO compute nmh_observables.source_module_consensus per
+    run (not just cascade_depth): H3's real data showed mean_d_max falling
+    as p rose from 2 to 32, opposite theory.cross_module_ceiling's
+    prediction (larger p -> more permissive ceiling). One live hypothesis is
+    that this is source-side (the source module's own members become
+    boundary workers at high p, diluting its OWN internal consensus before
+    propagation is ever tested, per Lemma 2.4's boundary-worker exception) --
+    source_module_consensus distinguishes "source never even committed"
+    (source-side artifact) from "source committed but nothing propagated"
+    (a genuine transport-ceiling finding).
+    """
+    prefix = "E16v2"
     configs = []
     for p in p_list:
         for seed in seeds:

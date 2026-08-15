@@ -69,6 +69,8 @@ from analysis.natural_cascade_experiments import (
     experiment_E13,
     experiment_E14_meritocratic_filter_local_steps,
     experiment_E16,
+    experiment_E16v2,
+    experiment_E5Hv2,
     experiment_NMH1,
     experiment_NMH1b,
     experiment_NMH1sb,
@@ -113,6 +115,7 @@ _VALID_PHASES = {
     "h1",  # paper1_computing_hybrid_gossip.md Annex B.1's E0 gate (see plan doc)
     "h2",  # Annex B.1's E7 (reused as-is) + E14RR (round-ratio sweep)
     "h3",  # Annex B.2 protocol axis: E17 (analysis-only), E16, E11H, E5H, E15MB
+    "h3fix",  # Interim re-run: E16v2 (connectivity-retry fix) + E5Hv2 (corrected sigma range)
 }
 _INT_ALIAS = {1: "1a", 2: "2a", 3: "3a", 4: "4a", 5: "5a", 6: "6a", 7: "7a"}
 
@@ -234,6 +237,15 @@ EXPERIMENT_HOURS: Dict[str, float] = {
     "E11H": 0.5,
     "E5H": 0.5,
     "E15MB": 0.001,
+    # Phase H3fix (interim re-run of E16/E5H, see review/review/phaseh3/
+    # ANALYSIS.md for why): same per-task shape as their originals, no
+    # reason to expect a different cost -- the fixes are a topology-
+    # construction retry (cheap; verified locally, <1s for 20 seeds even
+    # at the worst-case p=0.5) and a sigma value change (no effect on
+    # per-task cost).
+    "E16v2": 1.0,
+    "E5v2": 0.5,
+    "E5Hv2": 0.5,
 }
 
 # ---------------------------------------------------------------------------
@@ -851,6 +863,40 @@ def build_phase_tasks(
 
         for cfg in experiment_E15MB(seeds=_seeds(20)):
             tasks.append(_multi_basin_task(cfg, "E15MB", phase, results_root))
+
+    # ── Phase H3fix (interim re-run: E16v2, E5Hv2) ───────────────────────────
+    # See review/review/phaseh3/ANALYSIS.md for the full diagnosis of both
+    # bugs this phase re-runs against. E16v2 differs from E16 only in that
+    # its topology construction now retries a disconnected graph with a
+    # perturbed seed (build_nmh_topology_with_retry, analysis/
+    # natural_cascade.py) instead of failing the task outright -- p=0.5
+    # disconnected ~80% of the time for E16's shape, so the original run's
+    # surviving 4/20 p=0.5 seeds were a survivorship-biased sample, not a
+    # fair one. E5Hv2 differs from E5H only in sigma_list: E5H's original
+    # range (max 0.05) was ~17 effective-sigma short of the actual saddle
+    # distance at a=2.0/b=0.042, giving zero flips in 540/540 runs (and,
+    # confirmed separately, in the original non-hybrid E5 arm too, predating
+    # this campaign entirely) -- E5Hv2's range (0.1-0.4) was picked from a
+    # local calibration run showing the working threshold sits between 0.15
+    # and 0.2. Reads the SAME gateh2_review.json K window as phase h3 (not
+    # re-derived) so E5Hv2's hybrid arm stays comparable to E11H/E15MB.
+    elif phase == "h3fix":
+        if gate_results and gate_results.get("gateh2_K_low") is None:
+            print(
+                "[warn] gateh2_K_low is missing -- falling back to hardcoded "
+                "K defaults for E5Hv2's hybrid arm (see phase h3's identical warning)."
+            )
+        K_low = gate_results.get("gateh2_K_low") or 1.0
+        K_mid = gate_results.get("gateh2_K_mid") or 10.0
+        K_high = gate_results.get("gateh2_K_high") or 100.0
+        K_window = [K_low, K_mid, K_high]
+
+        for cfg in experiment_E16v2(seeds=_seeds(20)):
+            tasks.append(_nc_task(cfg, "E16v2", phase, results_root))
+
+        for cfg in experiment_E5Hv2(K_list=K_window, seeds=_seeds(30)):
+            experiment = "E5Hv2" if cfg.gossip_protocol == "hybrid" else "E5v2"
+            tasks.append(_nc_task(cfg, experiment, phase, results_root))
 
     return tasks
 

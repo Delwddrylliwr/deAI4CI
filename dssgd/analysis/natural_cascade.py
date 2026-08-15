@@ -201,6 +201,65 @@ class NaturalCascadeRun:
 
 
 # ---------------------------------------------------------------------------
+# Topology construction with connectivity retry
+# ---------------------------------------------------------------------------
+
+
+def build_nmh_topology_with_retry(
+    branching: int, depth: int, leaf_size: int, p: float, seed: int,
+    overlap_level: Optional[int] = None, delta_in: int = 1, n_overlap: int = 0,
+    max_retries: int = 200,
+) -> Topology:
+    """NestedModularTopology / OverlappingModularTopology construction,
+    retrying with a perturbed graph seed on a disconnected-graph ValueError
+    (topology/static.py's own sanity check) instead of propagating it as a
+    task failure.
+
+    At low p, the deepest level's cross-edge probability p/4^depth can sit
+    below this shape's percolation threshold, making disconnection common
+    (confirmed empirically: 16/20 seeds failed at p=0.5, branching=2,
+    depth=5, leaf_size=4 -- Annex B.2's E16 ceiling-location experiment).
+    Silently losing most of a seed sweep to this, rather than getting an
+    unbiased sample of the intended size, biases whatever survives toward
+    atypically well-connected draws -- exactly the wrong direction for an
+    experiment measuring how connectivity affects transmission. Retrying is
+    strictly better than failing outright: a disconnected draw is not a
+    meaningful data point to lose seeds over, it is simply the wrong graph
+    for the (branching, depth, leaf_size, p) shape requested.
+
+    Each retry uses `seed + attempt * 104729` (a large prime offset),
+    deterministic given the original seed, so results stay reproducible.
+    Shared by both `run_natural_cascade_simulation` here and its
+    checkpointable duplicate in `hpc/worker.py`'s `_run_nmh` -- imported,
+    not reimplemented, so the retry policy itself can't silently diverge
+    between the two even though the surrounding runner logic does (by
+    design, for checkpointing).
+    """
+    last_exc: Optional[ValueError] = None
+    for attempt in range(max_retries):
+        trial_seed = seed if attempt == 0 else seed + attempt * 104729
+        try:
+            if overlap_level is not None:
+                return OverlappingModularTopology(
+                    branching=branching, depth=depth, leaf_size=leaf_size, p=p,
+                    overlap_level=overlap_level, delta_in=delta_in, n_overlap=n_overlap,
+                    seed=trial_seed,
+                )
+            return NestedModularTopology(
+                branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=trial_seed,
+            )
+        except ValueError as exc:
+            if "disconnected graph" not in str(exc):
+                raise
+            last_exc = exc
+    raise ValueError(
+        f"Could not build a connected topology after {max_retries} seed retries "
+        f"(branching={branching}, depth={depth}, leaf_size={leaf_size}, p={p}, "
+        f"base_seed={seed}): {last_exc}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main runner
 # ---------------------------------------------------------------------------
 
@@ -257,25 +316,11 @@ def run_natural_cascade_simulation(
     assigns = leaf_assignments(n_agents, config.leaf_size)
 
     graph_seed = config.graph_seed if config.graph_seed is not None else config.seed
-    if config.overlap_level is not None:
-        topo: Topology = OverlappingModularTopology(
-            branching=config.branching,
-            depth=config.depth,
-            leaf_size=config.leaf_size,
-            p=config.p,
-            overlap_level=config.overlap_level,
-            delta_in=config.delta_in,
-            n_overlap=config.n_overlap,
-            seed=graph_seed,
-        )
-    else:
-        topo = NestedModularTopology(
-            branching=config.branching,
-            depth=config.depth,
-            leaf_size=config.leaf_size,
-            p=config.p,
-            seed=graph_seed,
-        )
+    topo: Topology = build_nmh_topology_with_retry(
+        branching=config.branching, depth=config.depth, leaf_size=config.leaf_size,
+        p=config.p, seed=graph_seed, overlap_level=config.overlap_level,
+        delta_in=config.delta_in, n_overlap=config.n_overlap,
+    )
     if config.sever_min_distance is not None:
         topo = SeveredTopology(topo, assigns, config.sever_min_distance)
 

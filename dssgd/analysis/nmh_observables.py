@@ -53,6 +53,37 @@ def cascade_depth(
     return max_d
 
 
+def source_module_consensus(
+    centroid_traj: np.ndarray,
+    source_leaf: int,
+    theta_A: np.ndarray,
+    theta_B: np.ndarray,
+    epsilon: float = 0.2,
+    persistence: int = 3,
+) -> Optional[int]:
+    """Whether/when the SOURCE leaf's own centroid reaches and holds basin B
+    -- `cascade_depth`'s counterpart restricted to source_leaf itself (which
+    `cascade_depth` explicitly excludes from its scan). Returns None if the
+    source leaf's own module never commits to B.
+
+    Diagnostic for Experiment E16's p-inversion (Prop. 4.10): `mean_d_max`
+    declined as p increased from 2 to 32 even though `theory.
+    cross_module_ceiling` predicts the OPPOSITE (larger p -> more permissive
+    ceiling -> more propagation). One candidate explanation is that this is
+    a SOURCE-side artifact, not a transport property: Lemma 2.4's clean
+    "clique converts to consensus every round" guarantee only holds for
+    workers whose entire neighbourhood lies inside the module, and at large
+    p more of the source module's OWN members may become boundary workers
+    (cross-linked outward), diluting the source module's ability to
+    consolidate on B internally before propagation to other modules is ever
+    tested. If `source_module_consensus` returns None at large p (source
+    never even commits) while `cascade_depth` is 0, the inversion is
+    source-side; if the source DOES commit but propagation still fails,
+    the ceiling itself is implicated instead.
+    """
+    return find_t_flip(centroid_traj[:, source_leaf, :], theta_A, theta_B, epsilon, persistence)
+
+
 def fraction_reaching_level(
     centroid_traj: np.ndarray,
     source_leaf: int,
