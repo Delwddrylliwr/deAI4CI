@@ -807,6 +807,8 @@ def experiment_E6(
     n_meas: int = 1000,
     source_leaf: int = 0,
     gossip_protocol: str = "async_poisson",
+    hybrid_K_list: Tuple[float, ...] = (),
+    epsilon_n_rounds: int = 5,
 ) -> List[NaturalCascadeConfig]:
     """E6: controlled generality level G(b) via per-leaf bias; measures
     max propagation depth d_max vs G (Theorem 4.5's level-matching filter).
@@ -825,6 +827,16 @@ def experiment_E6(
     machinery under test. Force-flipping the source is exactly the "assume
     the innovation has just occurred" initial condition NMH-1/NMH-3/E11 all
     use to isolate propagation from origination.
+
+    paper1_computing_hybrid_gossip.md Annex B.3's E6 ("... a (K, lambda)
+    grid... testing the margin condition of Rem. 4.5'"), phase H4:
+    hybrid_K_list=() (default) reproduces the ORIGINAL single-protocol E6
+    exactly, so phase 5a's existing call site is unaffected. Each K in
+    hybrid_K_list adds a matched "E6H" arm at that round ratio over the
+    SAME (G, seed) grid, gossip_protocol="hybrid" -- testing whether K
+    (filter *resolution*) and m/leaf_size (filter *reliability*) actually
+    separate as Rem. 4.5' predicts, against this K -> infinity
+    (gossip_protocol="async_poisson") arm as the reference point.
     """
     branching = 2
     n_leaf_types = branching ** depth
@@ -843,6 +855,21 @@ def experiment_E6(
                 a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=True,
                 source_leaf=source_leaf, gossip_protocol=gossip_protocol,
             ))
+    for K in hybrid_K_list:
+        for G in generality_levels:
+            plp = per_leaf_loss_params_for_generality(
+                n_leaf_types=n_leaf_types, source_leaf=source_leaf, generality_level=G,
+                branching=branching, a=a, b_in=b_in, b_out=b_out,
+            )
+            for seed in seeds:
+                configs.append(NaturalCascadeConfig(
+                    name=f"E6H/K={K}/G={G}/seed={seed}",
+                    branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                    n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                    a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=True,
+                    source_leaf=source_leaf, gossip_protocol="hybrid",
+                    round_ratio=K, epsilon_n_rounds=epsilon_n_rounds,
+                ))
     return configs
 
 
@@ -1049,6 +1076,56 @@ def experiment_E16(
     return configs
 
 
+def experiment_E16src(
+    p_list: List[float] = (0.5, 2.0, 8.0, 32.0),
+    a: float = 0.5,
+    b: float = 0.02,
+    seeds: List[int] = tuple(range(20)),
+    depth: int = 5,
+    leaf_size: int = 4,
+    lr: float = 0.1,
+    local_steps: int = 50,
+    n_warmup: int = 400,
+    n_meas: int = 2000,
+) -> List[NaturalCascadeConfig]:
+    """Phase H4's source-commitment/boundary-worker diagnostic for E16's
+    p-inversion. Configs are IDENTICAL to experiment_E16v2 (same
+    connectivity-retry-fixed topology construction) -- the only thing that
+    differs is the runtime code that produces the pkl: this is meant to be
+    queued only after NaturalCascadeRun/hpc.worker's `source_leaf`
+    persistence fix has landed, so the resulting pkls carry the TRUE
+    force-flipped source_leaf (not just the post-hoc nucleation_leaf
+    proxy), letting check_phaseh4.py's compute_e16src_table compute
+    nmh_observables.source_module_boundary_fraction unambiguously in every
+    cell, including the "source never committed" cells the proxy can't
+    resolve. See check_phaseh3.py's re-scored gateh3_e16_ceiling.csv
+    (H4 fix) for the preliminary, proxy-based version of this same
+    analysis run against the ORIGINAL phase H3 E16 pkls with no new
+    compute -- already striking: frac_source_committed fell 1.0 -> 0.25 ->
+    0.0 -> 0.0 as p rose 0.5 -> 2 -> 8 -> 32, matching the boundary-worker
+    dilution hypothesis's predicted direction.
+
+    Coordination note: if phase H3fix's own experiment_E16v2 run happens to
+    execute AFTER the source_leaf persistence fix has landed, its pkls
+    already satisfy everything this function exists for -- read
+    results/phaseh3fix/pkl/E16v2/ directly instead of queuing this as a
+    separate "E16src" run, to avoid duplicating identical compute under a
+    different name.
+    """
+    prefix = "E16src"
+    configs = []
+    for p in p_list:
+        for seed in seeds:
+            configs.append(NaturalCascadeConfig(
+                name=f"{prefix}/p={p}/seed={seed}",
+                depth=depth, leaf_size=leaf_size, p=p, seed=seed,
+                n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                a=a, b=b, force_flip_source=True, flip_noise_scale=0.0,
+                gossip_protocol="hybrid", round_ratio=0.0, epsilon_n_rounds=1,
+            ))
+    return configs
+
+
 def experiment_E16v2(
     p_list: List[float] = (0.5, 2.0, 8.0, 32.0),
     a: float = 0.5,
@@ -1126,6 +1203,8 @@ def experiment_E13(
     n_meas: int = 1000,
     source_leaf: int = 0,
     gossip_protocol: str = "async_poisson",
+    hybrid_K_list: Tuple[float, ...] = (),
+    epsilon_n_rounds: int = 5,
 ) -> List[NaturalCascadeConfig]:
     """DAG nesting: overlapping module hierarchies with tunable boundary
     in-degree Delta_in (delta_in) at `overlap_level`; a favourable ideal
@@ -1142,6 +1221,17 @@ def experiment_E13(
     mechanism to spontaneously nucleate under deterministic gradient descent
     (lambda<1) -- see experiment_E6's docstring for the confirmed failure
     mode this avoids.
+
+    paper1_computing_hybrid_gossip.md Annex B.3's E13 ("... at two K...
+    locate m*(Delta_in)"), phase H4: hybrid_K_list=() (default) reproduces
+    the ORIGINAL single-protocol E13 exactly, so phase 5a's existing call
+    site is unaffected. Each K in hybrid_K_list adds a matched "E13H" arm
+    at that round ratio over the SAME (delta_in, m, seed) grid,
+    gossip_protocol="hybrid" -- testing Remark 11.2''s clause switch: does
+    overlap enter logarithmically (m > 1 + log(...)) under the hybrid's
+    renewal-enforcing Type-N clock, rather than linearly (m > Delta_in) as
+    under free asynchrony -- against this K -> infinity
+    (gossip_protocol="async_poisson") arm as the reference point.
     """
     branching = 2
     n_leaf_types = branching ** depth
@@ -1176,6 +1266,33 @@ def experiment_E13(
                     overlap_level=overlap_level, delta_in=delta_in, n_overlap=n_overlap,
                     gossip_protocol=gossip_protocol,
                 ))
+    for K in hybrid_K_list:
+        for delta_in in delta_in_list:
+            for m in m_list:
+                from .generality import OverlapInfo, per_leaf_loss_params_for_generality as _plp
+
+                for seed in seeds:
+                    from dssgd.topology.static import OverlappingModularTopology
+                    topo = OverlappingModularTopology(
+                        branching=branching, depth=depth, leaf_size=m, p=p,
+                        overlap_level=overlap_level, delta_in=delta_in, n_overlap=n_overlap,
+                        seed=seed,
+                    )
+                    overlap = OverlapInfo(overlap_level=overlap_level, extra_parents=topo.extra_parents)
+                    plp = _plp(
+                        n_leaf_types=n_leaf_types, source_leaf=source_leaf,
+                        generality_level=overlap_level + 1, branching=branching,
+                        a=a, b_in=b_in, b_out=b_out, overlap=overlap,
+                    )
+                    configs.append(NaturalCascadeConfig(
+                        name=f"E13H/K={K}/delta_in={delta_in}/m={m}/seed={seed}",
+                        branching=branching, depth=depth, leaf_size=m, p=p, seed=seed,
+                        n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                        a=a, b=b_in, per_leaf_loss_params=plp, force_flip_source=True,
+                        source_leaf=source_leaf,
+                        overlap_level=overlap_level, delta_in=delta_in, n_overlap=n_overlap,
+                        gossip_protocol="hybrid", round_ratio=K, epsilon_n_rounds=epsilon_n_rounds,
+                    ))
     return configs
 
 

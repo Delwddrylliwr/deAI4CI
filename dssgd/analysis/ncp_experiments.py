@@ -26,7 +26,7 @@ draft numbering ("Theorem 4", "§3.5/§3.9", "Eq (30)-(39)") some docstrings
 below still carry over from that earlier draft.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from dssgd.protocols.gossip import protocol_suffix
 from dssgd.topology.forest_fire import ForestFireTopology
@@ -147,6 +147,8 @@ def experiment_E8(
     n_warmup: int = 400,
     n_meas: int = 800,
     gossip_protocol: str = "async_poisson",
+    hybrid_K_list: Tuple[float, ...] = (),
+    epsilon_n_rounds: int = 5,
 ) -> List[NCPSimConfig]:
     """Directional shell-crossing measurement generalising NCP-2's clamping
     from just the innermost/outermost shells to EVERY shell in the graph.
@@ -157,6 +159,17 @@ def experiment_E8(
     against the Lemma-3.1 prediction line computed from measured shell
     sizes (theory.fixation_bias, with the shell size as the effective
     clique size m -- q_fix(1; |S|, rho) -> 1/|S| as rho -> 1, eq. 5.1).
+
+    paper1_computing_hybrid_gossip.md Annex B.3's E8 ("directional
+    shell-crossing... at two K"), phase H4: hybrid_K_list=() (default)
+    reproduces the ORIGINAL single-protocol E8 exactly, so phase 7a's
+    existing call site is unaffected. Each K in hybrid_K_list adds a
+    matched "E8H" arm at that round ratio over the SAME (p_f, seed, clamp)
+    grid, gossip_protocol="hybrid" -- testing Remark 5.5's "protocol as
+    repair lever" claim (a live Type-P channel at finite K should widen
+    the polynomial inward route relative to K -> 0) against this
+    K -> infinity (gossip_protocol="async_poisson") arm as the reference
+    point, the same way E5H/E11H treat their non-hybrid arm.
     """
     prefix = f"E8{protocol_suffix(gossip_protocol)}"
     configs = []
@@ -170,6 +183,18 @@ def experiment_E8(
                 n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
                 a=a, b=b, clamped_shell=k, gossip_protocol=gossip_protocol,
             ))
+    for K in hybrid_K_list:
+        for seed in seeds:
+            topo = ForestFireTopology(n=n_nodes, p_f=p_f, seed=seed)
+            shell_ids = sorted(set(topo.shell_assignment().values()))
+            for k in shell_ids:
+                configs.append(NCPSimConfig(
+                    name=f"E8H/K={K}/p_f={p_f}/seed={seed}/clamp={k}",
+                    n_nodes=n_nodes, p_f=p_f, r=r, seed=seed,
+                    n_warmup=n_warmup, n_meas_rounds=n_meas, lr=lr, local_steps=local_steps,
+                    a=a, b=b, clamped_shell=k, gossip_protocol="hybrid",
+                    round_ratio=K, epsilon_n_rounds=epsilon_n_rounds,
+                ))
     return configs
 
 

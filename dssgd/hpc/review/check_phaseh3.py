@@ -58,7 +58,7 @@ from analysis import theory
 from analysis.clique_fixation import CliqueFixationRun
 from analysis.multi_basin_destruction import MultiBasinRun
 from analysis.natural_cascade import NaturalCascadeRun
-from analysis.nmh_observables import cascade_depth
+from analysis.nmh_observables import cascade_depth, source_module_consensus
 from analysis.provenance import crossover_stage
 from hpc.review.check_phaseh2 import load_vartheta_dagger_lookup, _parse_name
 
@@ -140,7 +140,24 @@ def summarize_e17(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def compute_e16_ceiling_table(
     pkl_dir: Path, vartheta_lookup: Dict[Tuple[float, float], float],
 ) -> List[Dict[str, Any]]:
-    by_p: Dict[float, List[int]] = defaultdict(list)
+    """H4 fix: earlier versions of this table anchored cascade_depth at a
+    hardcoded source_leaf=0, but the actual force-flipped leaf is drawn
+    uniformly at random (n_leaf_types=32 for the default depth=5 sweep), so
+    the pre-fix mean_d_max reported in review/phaseh3/gateh3_review.json and
+    dssgd/review/review/phaseh3/ANALYSIS.md is anchored correctly in only
+    ~1/32 of runs and should not be trusted for the p-inversion question.
+
+    Anchor is run.source_leaf when present (pkls produced after the
+    source_leaf persistence fix). Older pkls fall back to
+    run.nucleation_leaf as a proxy -- exact whenever the source leaf is the
+    one that nucleates (the common case, since the source is force-flipped
+    to B at t=0), and safe even when unknown in the "no leaf ever flipped"
+    case: nucleation_leaf is None only when NO leaf (including the true
+    source, whichever it was) ever reached B, so d_max=0 and
+    source_committed=False are correct regardless of the true source's
+    identity.
+    """
+    by_p: Dict[float, List[Dict[str, Any]]] = defaultdict(list)
     b_used = None
     for pkl_path in sorted(pkl_dir.glob("*.pkl")):
         try:
@@ -150,19 +167,35 @@ def compute_e16_ceiling_table(
         if not run.warmup_ok or "/p=" not in run.name:
             continue
         p = float(run.name.split("/p=")[1].split("/")[0])
-        d_max = cascade_depth(run.centroid_traj, 0, run.theta_A, run.theta_B, epsilon=0.2, persistence=3)
-        by_p[p].append(d_max)
+        true_source = getattr(run, "source_leaf", None)
+        source_leaf_is_proxy = true_source is None
+        anchor = true_source if true_source is not None else run.nucleation_leaf
+        if anchor is not None:
+            d_max = cascade_depth(run.centroid_traj, anchor, run.theta_A, run.theta_B, epsilon=0.2, persistence=3)
+            source_committed = source_module_consensus(
+                run.centroid_traj, anchor, run.theta_A, run.theta_B, epsilon=0.2, persistence=3,
+            ) is not None
+        else:
+            d_max = 0
+            source_committed = False
+        by_p[p].append({
+            "d_max": d_max,
+            "source_committed": source_committed,
+            "source_leaf_is_proxy": source_leaf_is_proxy,
+        })
         b_used = run.b
 
     vd = vartheta_lookup.get((0.5, round(b_used, 6))) if b_used is not None else None
 
     rows = []
-    for p, d_maxes in sorted(by_p.items()):
-        arr = np.array(d_maxes)
+    for p, records in sorted(by_p.items()):
+        d_maxes = np.array([r["d_max"] for r in records])
         predicted_l_theta = theory.cross_module_ceiling(p, vd) if vd is not None else None
         rows.append({
-            "p": p, "n_runs": len(arr), "mean_d_max": float(arr.mean()),
-            "max_d_max_observed": int(arr.max()) if len(arr) else None,
+            "p": p, "n_runs": len(records), "mean_d_max": float(d_maxes.mean()),
+            "max_d_max_observed": int(d_maxes.max()) if len(d_maxes) else None,
+            "frac_source_committed": float(np.mean([r["source_committed"] for r in records])),
+            "frac_source_leaf_is_proxy": float(np.mean([r["source_leaf_is_proxy"] for r in records])),
             "predicted_l_theta": predicted_l_theta,
             "predicted_floor_l_theta": math.floor(predicted_l_theta) if predicted_l_theta is not None else None,
         })

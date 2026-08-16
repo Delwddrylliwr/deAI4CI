@@ -26,6 +26,7 @@ from dssgd.nodes.registry import ModelEntry, ModelRegistry
 from dssgd.protocols.gossip import (
     AsynchronousGossip,
     GossipAveraging,
+    HybridGossip,
     SynchronousPairwiseGossip,
 )
 from dssgd.topology.forest_fire import ForestFireTopology
@@ -69,11 +70,17 @@ class NCPSimConfig:
     layer_name: str = "social"
     # NCP-2: clamp this shell to B throughout measurement (None = free run)
     clamped_shell: Optional[int] = None
-    # "async_poisson", "sync_pairwise" (SynchronousPairwiseGossip), or
-    # "sync_neighbourhood" (GossipAveraging, simultaneous m-way mean).
+    # "async_poisson", "sync_pairwise" (SynchronousPairwiseGossip),
+    # "sync_neighbourhood" (GossipAveraging, simultaneous m-way mean), or
+    # "hybrid" (HybridGossip, the two-jump protocol -- see round_ratio).
     gossip_protocol: str = "async_poisson"
     gossip_rate: Optional[float] = None     # None → auto-set to n_nodes (see runner)
     gossip_alpha: float = 0.5               # initiator mixing weight toward the neighbour
+    # Hybrid protocol only (E8H): round ratio K (eq. 2.2c) and the Type-N
+    # period in rounds -- same fields/semantics as
+    # NaturalCascadeConfig.round_ratio/epsilon_n_rounds.
+    round_ratio: Optional[float] = None
+    epsilon_n_rounds: int = 1
 
 
 @dataclass
@@ -243,14 +250,30 @@ def run_ncp_simulation(config: NCPSimConfig) -> NCPRun:
         )
     elif config.gossip_protocol == "sync_neighbourhood":
         protocol = GossipAveraging()
+    elif config.gossip_protocol == "hybrid":
+        pairwise_rate = (
+            HybridGossip.pairwise_rate_for_K(config.round_ratio, config.epsilon_n_rounds)
+            if config.round_ratio is not None
+            else (config.gossip_rate if config.gossip_rate is not None else float(config.n_nodes))
+        )
+        per_step_pairwise_rate = pairwise_rate / float(config.local_steps)
+        protocol = HybridGossip(
+            pairwise_rate=per_step_pairwise_rate,
+            epsilon_n_rounds=config.epsilon_n_rounds,
+            alpha=config.gossip_alpha,
+            rng=np.random.default_rng(config.seed + 42),
+        )
     else:
         raise ValueError(
             f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
-            f"'async_poisson', 'sync_pairwise', or 'sync_neighbourhood'."
+            f"'async_poisson', 'sync_pairwise', 'sync_neighbourhood', or 'hybrid'."
         )
+    _has_round_idx = hasattr(protocol, "round_idx")
 
     # Phase 1: warmup
     for round_idx in range(config.n_warmup):
+        if _has_round_idx:
+            protocol.round_idx = round_idx
         layer_graphs = ml_topo.step(round_idx)
         plan = compositor.compose(layer_graphs, agents[0].registry)
         for _ in range(config.local_steps):
@@ -277,6 +300,8 @@ def run_ncp_simulation(config: NCPSimConfig) -> NCPRun:
     traj_list: List[np.ndarray] = [post_warmup_params.copy()]
 
     for round_idx in range(config.n_meas_rounds):
+        if _has_round_idx:
+            protocol.round_idx = config.n_warmup + round_idx
         layer_graphs = ml_topo.step(config.n_warmup + round_idx)
         plan = compositor.compose(layer_graphs, agents[0].registry)
         for _ in range(config.local_steps):

@@ -69,6 +69,7 @@ from analysis.natural_cascade_experiments import (
     experiment_E13,
     experiment_E14_meritocratic_filter_local_steps,
     experiment_E16,
+    experiment_E16src,
     experiment_E16v2,
     experiment_E5Hv2,
     experiment_NMH1,
@@ -116,6 +117,11 @@ _VALID_PHASES = {
     "h2",  # Annex B.1's E7 (reused as-is) + E14RR (round-ratio sweep)
     "h3",  # Annex B.2 protocol axis: E17 (analysis-only), E16, E11H, E5H, E15MB
     "h3fix",  # Interim re-run: E16v2 (connectivity-retry fix) + E5Hv2 (corrected sigma range)
+    "h4",  # E16src (source-commitment/boundary-worker diagnostic) + E6H/E13H/
+           # E8H (Annex B.3's topology-axis experiments rerun at the H-round
+           # K window -- the "K-confounded" class B.0.4 flags as needing a
+           # hybrid-protocol run, still missing after h1-h3fix; see
+           # check_phaseh4.py's module docstring)
 }
 _INT_ALIAS = {1: "1a", 2: "2a", 3: "3a", 4: "4a", 5: "5a", 6: "6a", 7: "7a"}
 
@@ -246,6 +252,14 @@ EXPERIMENT_HOURS: Dict[str, float] = {
     "E16v2": 1.0,
     "E5v2": 0.5,
     "E5Hv2": 0.5,
+    # Phase H4 (E16src, E6H/E13H/E8H -- the topology-axis hybrid reruns and
+    # the E16 source-commitment diagnostic). K adds more TASKS (one arm per
+    # K value), not more expensive ones, so each entry is the same
+    # per-task magnitude as its non-hybrid counterpart above.
+    "E16src": 1.0,   # same shape as E16/E16v2
+    "E6H": 0.5,      # same shape as E6
+    "E13H": 4.0,     # same shape as E13
+    "E8H": 3.0,      # same shape as E8
 }
 
 # ---------------------------------------------------------------------------
@@ -897,6 +911,48 @@ def build_phase_tasks(
         for cfg in experiment_E5Hv2(K_list=K_window, seeds=_seeds(30)):
             experiment = "E5Hv2" if cfg.gossip_protocol == "hybrid" else "E5v2"
             tasks.append(_nc_task(cfg, experiment, phase, results_root))
+
+    # ── Phase H4 (E16src diagnostic + E6H/E13H/E8H topology-axis reruns) ────
+    # Closes the gap flagged in check_phaseh4.py's module docstring: h1-h3fix
+    # validated the hybrid protocol's MECHANICS but never reran the paper's
+    # topology-level claims (Thm 4.5, Thm 11.3, Prop 5.2/Rem 5.5) under it --
+    # Annex B.0.4 classifies E6/E13/E8 as "K-confounded", needing a
+    # hybrid-protocol run at the SAME K window H2/H3 already measured. E16src
+    # is the source-commitment/boundary-worker diagnostic for E16's
+    # unexplained p-inversion (dssgd/review/review/phaseh3/ANALYSIS.md);
+    # unlike E6H/E13H/E8H it needs no K window at all (round_ratio=0.0,
+    # matching E16/E16v2's Type-N-only design). Reads the same gateh2_K_low/
+    # mid/high as h3/h3fix (warn-but-don't-block if missing, same convention).
+    elif phase == "h4":
+        if gate_results and gate_results.get("gateh2_K_low") is None:
+            print(
+                "[warn] gateh2_K_low is missing -- falling back to hardcoded "
+                "K defaults for E6H/E13H/E8H (see phase h3's identical warning)."
+            )
+        K_low = gate_results.get("gateh2_K_low") or 1.0
+        K_mid = gate_results.get("gateh2_K_mid") or 10.0
+        K_high = gate_results.get("gateh2_K_high") or 100.0
+        K_window = [K_low, K_mid, K_high]
+
+        # E16src: coordination note (see experiment_E16src's own docstring)
+        # -- skip queuing this if phase h3fix's own E16v2 already ran AFTER
+        # the source_leaf persistence fix landed, and read
+        # results/phaseh3fix/pkl/E16v2/ directly instead, to avoid
+        # duplicating identical compute under a different name.
+        for cfg in experiment_E16src(seeds=_seeds(20)):
+            tasks.append(_nc_task(cfg, "E16src", phase, results_root))
+
+        for cfg in experiment_E6(hybrid_K_list=K_window, seeds=_seeds(50)):
+            if cfg.gossip_protocol == "hybrid":
+                tasks.append(_nc_task(cfg, "E6H", phase, results_root))
+
+        for cfg in experiment_E13(hybrid_K_list=K_window, seeds=_seeds(30)):
+            if cfg.gossip_protocol == "hybrid":
+                tasks.append(_nc_task(cfg, "E13H", phase, results_root))
+
+        for cfg in experiment_E8(hybrid_K_list=K_window, seeds=_seeds(50)):
+            if cfg.gossip_protocol == "hybrid":
+                tasks.append(_ncp_task(cfg, "E8H", phase, results_root))
 
     return tasks
 

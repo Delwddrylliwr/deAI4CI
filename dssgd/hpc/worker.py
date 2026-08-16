@@ -491,6 +491,7 @@ class CheckpointableRunner:
             regime=regime,
             ell_c=ell_c,
             events=protocol.events if config.track_provenance else None,
+            source_leaf=source_leaf,
         )
 
     # ------------------------------------------------------------------
@@ -867,6 +868,7 @@ def extract_result_summary(result, task: Dict[str, Any]) -> Dict[str, Any]:
         flipped = sum(1 for row in result.flip_table if row.get("t_flip_absolute") is not None)
         return {
             "warmup_ok": result.warmup_ok,
+            "source_leaf": result.source_leaf,
             "nucleation_leaf": result.nucleation_leaf,
             "t_nucleation": result.t_nucleation,
             "n_flipped": flipped,

@@ -193,6 +193,53 @@ def realized_cross_edge_count(
     )
 
 
+def source_module_boundary_fraction(
+    branching: int,
+    depth: int,
+    leaf_size: int,
+    p: float,
+    graph_seed: int,
+    source_leaf: int,
+) -> float:
+    """Fraction of source_leaf's own `leaf_size` members that are "boundary
+    workers" in Lemma 2.4(3)'s sense: at least one neighbour lying outside
+    their own level-0 module. Lemma 2.4's clean "clique converts to
+    consensus every round" guarantee (the basis of Prop. 4.10's ceiling)
+    holds only for workers whose ENTIRE neighbourhood is intra-module --
+    boundary workers are its stated exception.
+
+    Diagnostic for Experiment E16's p-inversion (source_module_consensus's
+    docstring / check_phaseh3.py's compute_e16_ceiling_table): at large p,
+    more of the SOURCE module's own members may become boundary workers
+    (cross-linked outward by the geometric wiring rule pi_l = p/4^l, whose
+    level-1 term p/4 grows fastest), diluting the source module's own
+    Type-N consolidation before propagation to other modules is ever
+    tested. Predicted signature under the dilution hypothesis: this
+    fraction rises with p, tracking the observed fall in
+    frac_source_committed.
+
+    Reconstructs the exact NestedModularTopology graph from its
+    construction parameters, exactly as realized_cross_edge_count does
+    (the graph itself isn't persisted on NaturalCascadeRun) -- graph_seed
+    must be the value the run actually used
+    (config.graph_seed if not None else config.seed).
+    """
+    from dssgd.topology.static import NestedModularTopology
+
+    topo = NestedModularTopology(
+        branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=graph_seed,
+    )
+    G, _ = topo.step(0)
+
+    module_start = source_leaf * leaf_size
+    module_nodes = range(module_start, module_start + leaf_size)
+    n_boundary = sum(
+        1 for u in module_nodes
+        if any(v // leaf_size != source_leaf for v in G.neighbors(u))
+    )
+    return n_boundary / leaf_size
+
+
 # ---------------------------------------------------------------------------
 # Nucleation probability (NMH-2)
 # ---------------------------------------------------------------------------

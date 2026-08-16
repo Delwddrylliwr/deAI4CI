@@ -162,6 +162,15 @@ class NaturalCascadeRun:
         Leaf index that first entered basin B.  None if no leaf flipped.
     t_nucleation : int or None
         Absolute measurement round of first B-entry.
+    source_leaf : int or None
+        The leaf actually force-flipped at t=0 (config.source_leaf if set,
+        else the random draw made at runtime when force_flip_source=True).
+        None if force_flip_source=False. Distinct from nucleation_leaf,
+        which is POST-HOC detected as "whichever leaf flipped first" and is
+        None whenever the source leaf itself never sustains B -- exactly the
+        case a source-side diagnostic (E16src) needs to distinguish from a
+        transport-ceiling failure. Absent (getattr default) on pkls
+        produced before this field was added.
     """
 
     name: str
@@ -187,6 +196,7 @@ class NaturalCascadeRun:
     regime: str
     ell_c: int
     events: Optional[List[GossipEvent]] = None  # populated iff track_provenance=True
+    source_leaf: Optional[int] = None  # true force-flip source; see docstring above
 
     def save(self, path: Union[str, Path]) -> None:
         p_obj = Path(path)
@@ -501,6 +511,7 @@ def run_natural_cascade_simulation(
     # pins which leaf, for experiments whose per-leaf heterogeneity (and
     # scoring) is keyed to a specific origin (E6/E12a); otherwise a leaf is
     # chosen uniformly at random (NMH-1/NMH-3/E11: every leaf is equivalent).
+    source_leaf: Optional[int] = None
     if config.force_flip_source:
         source_leaf = (
             config.source_leaf if config.source_leaf is not None
@@ -615,4 +626,5 @@ def run_natural_cascade_simulation(
         regime=regime,
         ell_c=ell_c,
         events=protocol.events if config.track_provenance else None,
+        source_leaf=source_leaf,
     )

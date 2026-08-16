@@ -63,6 +63,17 @@ from hpc.review.check_phaseh2 import load_vartheta_dagger_lookup
 def compute_e16v2_ceiling_table(
     pkl_dir: Path, vartheta_lookup: Dict[Tuple[float, float], float],
 ) -> List[Dict[str, Any]]:
+    """H4 fix: this table (and cascade_depth/source_module_consensus's own
+    call sites here) used to anchor on a hardcoded source_leaf=0, defeating
+    the point of the source-side diagnostic this script exists to run (the
+    actual force-flipped leaf is drawn uniformly at random). Anchor is now
+    run.source_leaf when present (requires the source_leaf persistence fix
+    in analysis/natural_cascade.py / hpc/worker.py to have landed before
+    this phase's E16v2 tasks were run); falls back to run.nucleation_leaf
+    for pkls produced before that fix -- see compute_e16_ceiling_table's
+    docstring in check_phaseh3.py for why that fallback is exact except in
+    the (safely handled) no-flip case.
+    """
     by_p: Dict[float, List[Dict[str, Any]]] = defaultdict(list)
     b_used = None
     for pkl_path in sorted(pkl_dir.glob("*.pkl")):
@@ -73,11 +84,22 @@ def compute_e16v2_ceiling_table(
         if not run.warmup_ok or "/p=" not in run.name:
             continue
         p = float(run.name.split("/p=")[1].split("/")[0])
-        d_max = cascade_depth(run.centroid_traj, 0, run.theta_A, run.theta_B, epsilon=0.2, persistence=3)
-        source_t_flip = source_module_consensus(
-            run.centroid_traj, 0, run.theta_A, run.theta_B, epsilon=0.2, persistence=3,
-        )
-        by_p[p].append({"d_max": d_max, "source_committed": source_t_flip is not None})
+        true_source = getattr(run, "source_leaf", None)
+        source_leaf_is_proxy = true_source is None
+        anchor = true_source if true_source is not None else run.nucleation_leaf
+        if anchor is not None:
+            d_max = cascade_depth(run.centroid_traj, anchor, run.theta_A, run.theta_B, epsilon=0.2, persistence=3)
+            source_committed = source_module_consensus(
+                run.centroid_traj, anchor, run.theta_A, run.theta_B, epsilon=0.2, persistence=3,
+            ) is not None
+        else:
+            d_max = 0
+            source_committed = False
+        by_p[p].append({
+            "d_max": d_max,
+            "source_committed": source_committed,
+            "source_leaf_is_proxy": source_leaf_is_proxy,
+        })
         b_used = run.b
 
     vd = vartheta_lookup.get((0.5, round(b_used, 6))) if b_used is not None else None
@@ -86,11 +108,13 @@ def compute_e16v2_ceiling_table(
     for p, records in sorted(by_p.items()):
         d_maxes = np.array([r["d_max"] for r in records])
         frac_source_committed = float(np.mean([r["source_committed"] for r in records]))
+        frac_source_leaf_is_proxy = float(np.mean([r["source_leaf_is_proxy"] for r in records]))
         predicted_l_theta = theory.cross_module_ceiling(p, vd) if vd is not None else None
         rows.append({
             "p": p, "n_runs": len(records), "mean_d_max": float(d_maxes.mean()),
             "max_d_max_observed": int(d_maxes.max()) if len(d_maxes) else None,
             "frac_source_committed": frac_source_committed,
+            "frac_source_leaf_is_proxy": frac_source_leaf_is_proxy,
             "predicted_l_theta": predicted_l_theta,
             "predicted_floor_l_theta": math.floor(predicted_l_theta) if predicted_l_theta is not None else None,
         })
