@@ -558,8 +558,12 @@ class CheckpointableRunner:
         ml_topo = MultiLayerTopology({config.layer_name: ff_topo})
         compositor = CoupledCompositor()
 
-        _async_ncp = config.gossip_protocol == "async_poisson"
-        if _async_ncp:
+        # hybrid is treated as rate-based/async here, matching _run_nmh's
+        # _async_nmh membership test -- keeps the H4 topology-axis reruns
+        # (E6H/E13H natural_cascade vs. E8H ncp_simulation) on the same
+        # per-local-step gossip cadence for a like-for-like comparison.
+        _async_ncp = config.gossip_protocol in ("async_poisson", "hybrid")
+        if config.gossip_protocol == "async_poisson":
             per_step_rate = (
                 config.gossip_rate if config.gossip_rate is not None else float(config.n_nodes)
             ) / float(config.local_steps)
@@ -574,14 +578,31 @@ class CheckpointableRunner:
             )
         elif config.gossip_protocol == "sync_neighbourhood":
             protocol = GossipAveraging()
+        elif config.gossip_protocol == "hybrid":
+            pairwise_rate = (
+                HybridGossip.pairwise_rate_for_K(config.round_ratio, config.epsilon_n_rounds)
+                if config.round_ratio is not None
+                else (config.gossip_rate if config.gossip_rate is not None else float(config.n_nodes))
+            )
+            per_step_pairwise_rate = pairwise_rate / float(config.local_steps)
+            protocol = HybridGossip(
+                pairwise_rate=per_step_pairwise_rate,
+                epsilon_n_rounds=config.epsilon_n_rounds,
+                alpha=config.gossip_alpha,
+                rng=np.random.default_rng(config.seed + 42),
+            )
         else:
             raise ValueError(
                 f"Unknown gossip_protocol {config.gossip_protocol!r}; expected "
-                f"'async_poisson', 'sync_pairwise', or 'sync_neighbourhood'."
+                f"'async_poisson', 'sync_pairwise', 'sync_neighbourhood', or 'hybrid'."
             )
+
+        _has_round_idx = hasattr(protocol, "round_idx")
 
         # Warmup
         for round_idx in range(config.n_warmup):
+            if _has_round_idx:
+                protocol.round_idx = round_idx
             layer_graphs = ml_topo.step(round_idx)
             plan = compositor.compose(layer_graphs, agents[0].registry)
             for _ in range(config.local_steps):
@@ -625,6 +646,8 @@ class CheckpointableRunner:
 
         # Measurement loop
         for round_idx in range(resume_round, config.n_meas_rounds):
+            if _has_round_idx:
+                protocol.round_idx = config.n_warmup + round_idx
             layer_graphs = ml_topo.step(config.n_warmup + round_idx)
             plan = compositor.compose(layer_graphs, agents[0].registry)
             for _ in range(config.local_steps):
