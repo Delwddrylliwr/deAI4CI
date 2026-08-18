@@ -52,7 +52,7 @@ def experiment_C1_capacity_sweep(
 
     capacity_bits_list includes None as the uncompressed control arm --
     Prediction 6.1 explicitly requires "at large k the compressed model
-    recovers Paper I's kick dynamics", and the only way to check that
+    recovers Paper I's tug dynamics", and the only way to check that
     exactly (not just approximately, by using a very large k) is to also run
     the genuinely-uncompressed config.
     """
@@ -103,7 +103,7 @@ def experiment_C2_articulation_ablation(
 ) -> List[NaturalCascadeConfig]:
     """C2: m in leaf_sizes at MATCHED total N (depth chosen per m so
     leaf_size * branching**depth ~= total_n_target -- gossip_rate auto-sets
-    to n_agents, so matched N also matches total kick rate). leaf_size=1 is
+    to n_agents, so matched N also matches total tug rate). leaf_size=1 is
     the "bare tree of individuals" (Sec. 5.2.1); larger m are NMH's normal
     peer-clique base module. track_articulation_diagnostics=True records
     each base module's chord barrier pre/post intra-module consensus (see
@@ -201,7 +201,7 @@ def basin_specs_for_C3(
     # raises -- at a=0.5 that's b < ~0.0481; 0.044 is the largest round
     # value comfortably inside it. Values at or above the limit correspond
     # to a single merged basin (no vartheta to speak of, and receiver
-    # relaxation alone would reach B with no kick at all, which is exactly
+    # relaxation alone would reach B with no tug at all, which is exactly
     # the degenerate case Definition 4.1's bit-budget question is meant to
     # exclude).
     b_in_list: List[float] = (0.020, 0.026, 0.032, 0.038, 0.044),

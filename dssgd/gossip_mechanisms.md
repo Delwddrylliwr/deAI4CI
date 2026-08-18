@@ -32,7 +32,7 @@ string and experiment-name/pkl-directory suffix (`dssgd.protocols.gossip.protoco
 |---|---|---|---|
 | `"async_poisson"` | `AsynchronousGossip` | *(none)* | Poisson-timed, one-sided pairwise pull events, sequential within a round. |
 | `"sync_pairwise"` | `SynchronousPairwiseGossip` | `SP` | Round-synchronous: a maximal matching each round, each matched pair doing the *same* pairwise pull `AsynchronousGossip` uses, all reading from one pre-round snapshot. |
-| `"sync_neighbourhood"` | `GossipAveraging` | `SN` | Round-synchronous: every agent simultaneously averages with its *whole* current neighbourhood + itself — a simultaneous m-way mean, not a pairwise kick. |
+| `"sync_neighbourhood"` | `GossipAveraging` | `SN` | Round-synchronous: every agent simultaneously averages with its *whole* current neighbourhood + itself — a simultaneous m-way mean, not a pairwise tug. |
 
 `bounded_staleness` (E11 only) is a fourth, special-purpose variant of `AsynchronousGossip`
 with a per-edge staleness lock; it doesn't get a directory suffix of its own — E11 encodes
@@ -42,7 +42,7 @@ multiple scheduling classes within one experiment.
 ## Why this needed sorting out
 
 The paper's theory (`paper1_PDMP_wDAG_wData.md`, Remark 4.3) draws a specific scheduling
-distinction: **round-synchronous scheduling of pairwise kicks** (the "H-sched" class) is
+distinction: **round-synchronous scheduling of pairwise tugs** (the "H-sched" class) is
 predicted to *preserve* the level-matching filter (Theorem 4.5) by construction, because
 every boundary seed's fixation contest resolves before the next one arrives. That is a
 claim about *pairwise* dynamics under synchronous timing — it says nothing about
@@ -167,7 +167,7 @@ mechanism split alone didn't close:
 
 E12/NMH-2's containment result (Thm. 4.5) had only ever been checked at one `local_steps`
 value, and only for the (at the time, conflated) sync mechanism. NMH-1b's local-steps sweep
-tests inter-kick relaxation timing for a single forced-flip leaf, not containment across the
+tests inter-tug relaxation timing for a single forced-flip leaf, not containment across the
 generality hierarchy — it doesn't sweep `G` or `protocol`, so it can't say whether
 containment survives faster/slower gossip relative to local optimisation, or whether it
 differs by mechanism. `experiment_E14_meritocratic_filter_local_steps`
@@ -181,11 +181,11 @@ disambiguates mechanism, so it doesn't need a directory suffix the way E12a/E12b
 diagnostic-only (not gated into `gate6_pass`) until there's enough real data to know what a
 meaningful pass threshold looks like.
 
-### E15 — the degenerate kick-weight law
+### E15 — the degenerate tug-strength law
 
-Every protocol above the theory line applies a single fixed mixing weight `alpha` per kick
+Every protocol above the theory line applies a single fixed mixing weight `alpha` per tug
 (a point mass on one value), but the paper's general reduction (Lemma 3.1's derivation, and
-the r>1 hard-zero discussed for `fixation_bias`) assumes an *averaged/distributed* kick-weight
+the r>1 hard-zero discussed for `fixation_bias`) assumes an *averaged/distributed* tug-strength
 law `mu_C` — `p_+ = Pr_{C~mu_C}[C >= vartheta]`, not a single indicator. Under the repo's old
 degenerate point-mass law, `fixation_bias` predicts a hard-zero cliff for `r > 1`
 (`predicted_q_fix` jumps to exactly 0), while E12b's real async data shows a smooth decay
@@ -194,21 +194,21 @@ noted as a documented theory-vs-model tension, not tested against an alternative
 
 Two additions close this gap without touching the existing degenerate-law code path:
 
-- `theory.fixation_bias_distributed(a, b, delta_norm, r, kick_weight_cdf)` — the same
-  birth-death bias `rho = p_-/p_+`, but `p_+`/`p_-` are computed from a supplied kick-weight
-  CDF (default `uniform_kick_cdf`, i.e. `Uniform(0,1)`) instead of a single indicator
+- `theory.fixation_bias_distributed(a, b, delta_norm, r, tug_strength_cdf)` — the same
+  birth-death bias `rho = p_-/p_+`, but `p_+`/`p_-` are computed from a supplied tug-strength
+  CDF (default `uniform_tug_cdf`, i.e. `Uniform(0,1)`) instead of a single indicator
   threshold. Numerically this gives a smooth decay (`q_fix ≈ 0.25 → 0.19` over `r=1..2`)
   instead of the old hard cliff, matching the *shape* of the real E12b async discrepancy.
   `fixation_bias` itself is deliberately left unchanged — the two functions model different
   laws, not competing bugfixes of the same one.
 - `AsynchronousGossip`/`SynchronousPairwiseGossip` gained an optional
   `alpha_sampler: Callable[[], float]` constructor argument (via
-  `make_uniform_alpha_sampler`); when set, each kick draws its mixing weight fresh instead of
+  `make_uniform_alpha_sampler`); when set, each tug draws its mixing weight fresh instead of
   using the fixed `alpha`. `GossipAveraging` (`sync_neighbourhood`) has no scalar alpha to
-  distribute and rejects `kick_weight_law != "fixed"` outright
+  distribute and rejects `tug_strength_law != "fixed"` outright
   (`clique_fixation.run_clique_fixation_trial`).
-- `experiment_E15_distributed_kick_curvature_ratchet` (`clique_fixation.py`) is E12b's
-  curvature-ratchet sweep re-run with `kick_weight_law="uniform"` instead of `"fixed"` — a
+- `experiment_E15_distributed_tug_curvature_ratchet` (`clique_fixation.py`) is E12b's
+  curvature-ratchet sweep re-run with `tug_strength_law="uniform"` instead of `"fixed"` — a
   new experiment, not a reinterpretation of E12b's existing outputs, queued separately under
   `6a`/`6s` (`E15`/`E15SP`) and scored by `check_phase6.compute_e15_curvature_table` against
   `fixation_bias_distributed` rather than `fixation_bias`. Also diagnostic-only for now.

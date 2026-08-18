@@ -395,7 +395,7 @@ def _saddle_node_roots_asym(
 
 
 def chord_geometry(a: float, b: float, delta_norm: float = 1.0, r: float = 1.0) -> Dict[str, float]:
-    """Chord-fraction single-kick success thresholds (eq. 2.5) computed from
+    """Chord-fraction single-tug success thresholds (eq. 2.5) computed from
     the loss geometry alone -- lambda, the three critical points s_A <
     s_dagger < s_B, and the normalised thresholds vartheta_{A->B},
     vartheta_{B->A} for crossing from one basin to the other.
@@ -423,53 +423,53 @@ def chord_geometry(a: float, b: float, delta_norm: float = 1.0, r: float = 1.0) 
 
 
 def fixation_bias(
-    a: float, b: float, kick_weight: float, delta_norm: float = 1.0, r: float = 1.0,
+    a: float, b: float, tug_strength: float, delta_norm: float = 1.0, r: float = 1.0,
 ) -> float:
     """Birth-death bias rho = p_-/p_+ of Lemma 3.1 (r=1.0, the default) or
     of Lemma 10.1's curvature-ratio generalisation (r!=1, as E12b sweeps),
-    computed (not fitted) from the loss geometry and a single fixed kick
-    weight. r=1 is the equal-curvature family of Lemma 2.1 that Lemma 3.1
+    computed (not fitted) from the loss geometry and a single fixed tug
+    strength. r=1 is the equal-curvature family of Lemma 2.1 that Lemma 3.1
     is stated for; r!=1 routes through chord_geometry's curvature_epsilon(r)
     (Lemma 10.1 Sec. 10), so the returned rho is rho_curv(r)-flavoured, not
     literally Lemma 3.1's rho_depth(lambda), whenever r!=1.
 
-    This repo's kick-weight law mu_C is degenerate: AsynchronousGossip pulls
+    This repo's tug-strength law mu_C is degenerate: AsynchronousGossip pulls
     with a single fixed mixing weight (`alpha`/`gossip_alpha`), not a
-    continuous law, so p_+ = 1[kick_weight >= vartheta_{A->B}] and
-    p_- = 1[kick_weight >= vartheta_{B->A}] are indicators rather than the
+    continuous law, so p_+ = 1[tug_strength >= vartheta_{A->B}] and
+    p_- = 1[tug_strength >= vartheta_{B->A}] are indicators rather than the
     genuinely continuous probabilities Lemma 3.1 anticipates from a richer
-    kick-weight law. rho therefore reduces to a step function of lambda at
-    fixed kick_weight (e.g. rho=0 for every lambda>0 at the default
+    tug-strength law. rho therefore reduces to a step function of lambda at
+    fixed tug_strength (e.g. rho=0 for every lambda>0 at the default
     alpha=0.5, since vartheta_{A->B} < 0.5 < vartheta_{B->A} for any
     B-favouring tilt).
 
-    Caveat (Experiment E7): whether this single-kick-then-fully-relax
+    Caveat (Experiment E7): whether this single-tug-then-fully-relax
     idealisation matches the fixation frequency actually observed under the
-    repo's dynamics -- where local gradient steps and gossip kicks are
+    repo's dynamics -- where local gradient steps and gossip tugs are
     interleaved `local_steps` times per measurement round rather than one
-    kick fully relaxing before the next -- is exactly what E7 tests. This
+    tug fully relaxing before the next -- is exactly what E7 tests. This
     function is deliberately kept literal to Lemma 3.1 rather than curve-fit
     to simulation; disagreement with measured fixation frequency is
     informative, not a bug to silently patch over.
 
     See fixation_bias_distributed for the general (non-degenerate) reduction
-    under a genuinely continuous kick-weight law -- this function stays as
+    under a genuinely continuous tug-strength law -- this function stays as
     the literal degenerate-law prediction, kept deliberately unchanged so it
     remains available as the honest "what the fixed-alpha simulation
     actually implies" baseline the distributed version is compared against.
     """
     geom = chord_geometry(a, b, delta_norm, r=r)
-    p_plus = 1.0 if kick_weight >= geom["vartheta_A_to_B"] else 0.0
-    p_minus = 1.0 if kick_weight >= geom["vartheta_B_to_A"] else 0.0
+    p_plus = 1.0 if tug_strength >= geom["vartheta_A_to_B"] else 0.0
+    p_minus = 1.0 if tug_strength >= geom["vartheta_B_to_A"] else 0.0
     if p_plus == 0.0:
         return math.inf
     return p_minus / p_plus
 
 
-def uniform_kick_cdf(x: float) -> float:
-    """CDF of Uniform(0,1) kick weight: F(x) = x for x in [0,1], clipped
+def uniform_tug_cdf(x: float) -> float:
+    """CDF of Uniform(0,1) tug strength: F(x) = x for x in [0,1], clipped
     outside. The natural, parameter-free, maximally-non-informative choice
-    of a genuinely continuous kick-weight law mu_C -- the default for
+    of a genuinely continuous tug-strength law mu_C -- the default for
     fixation_bias_distributed, and the law gossip.make_uniform_alpha_sampler
     draws from so the simulation and this prediction stay coupled to the
     same mu_C (see that function's docstring for why this matters)."""
@@ -478,23 +478,23 @@ def uniform_kick_cdf(x: float) -> float:
 
 def fixation_bias_distributed(
     a: float, b: float, delta_norm: float = 1.0, r: float = 1.0,
-    kick_weight_cdf: Callable[[float], float] = uniform_kick_cdf,
+    tug_strength_cdf: Callable[[float], float] = uniform_tug_cdf,
 ) -> float:
     """Birth-death bias rho = p_-/p_+ (Lemma 3.1's general reduction, Sec.
     3.1: p_+ := mu_C{C >= vartheta_A_to_B}-average, i.e. Pr_{C~mu_C}[C >=
-    vartheta] = 1 - CDF(vartheta)) under a genuinely continuous kick-weight
+    vartheta] = 1 - CDF(vartheta)) under a genuinely continuous tug-strength
     law mu_C given by its CDF, rather than fixation_bias's single-fixed-
-    kick-weight degenerate special case (which collapses p_+/p_- to hard
+    tug-strength degenerate special case (which collapses p_+/p_- to hard
     indicators of whether one fixed alpha clears the threshold).
 
-    Defaults to Uniform(0,1) (uniform_kick_cdf) -- the simplest non-
+    Defaults to Uniform(0,1) (uniform_tug_cdf) -- the simplest non-
     degenerate choice, with no free parameters of its own. Pass a different
-    kick_weight_cdf to test other kick-weight laws without touching this
+    tug_strength_cdf to test other tug-strength laws without touching this
     function's structure.
 
     For this to be a fair test against simulation (not a theory change
     tested against a simulation that still uses the OLD degenerate law),
-    pair with a protocol whose kick weight is actually drawn from the SAME
+    pair with a protocol whose tug strength is actually drawn from the SAME
     law each event -- see gossip.AsynchronousGossip/SynchronousPairwiseGossip's
     `alpha_sampler` parameter and gossip.make_uniform_alpha_sampler. Passing
     a mismatched cdf/sampler pair silently reintroduces the same kind of
@@ -506,8 +506,8 @@ def fixation_bias_distributed(
     handling exactly (same chord_geometry/curvature_epsilon(r) call).
     """
     geom = chord_geometry(a, b, delta_norm, r=r)
-    p_plus = 1.0 - kick_weight_cdf(geom["vartheta_A_to_B"])
-    p_minus = 1.0 - kick_weight_cdf(geom["vartheta_B_to_A"])
+    p_plus = 1.0 - tug_strength_cdf(geom["vartheta_A_to_B"])
+    p_minus = 1.0 - tug_strength_cdf(geom["vartheta_B_to_A"])
     if p_plus <= 0.0:
         return math.inf
     return p_minus / p_plus
@@ -640,11 +640,11 @@ def cross_module_ceiling(p: float, vartheta_dagger_val: float) -> float:
     return math.log2(p / (vartheta_dagger_val * (1.0 + p / 2.0))) - 1.0
 
 
-def kick_success_probabilities_distributed(
+def tug_success_probabilities_distributed(
     a: float, b: float, delta_norm: float = 1.0, r: float = 1.0,
-    kick_weight_cdf: Callable[[float], float] = uniform_kick_cdf,
+    tug_strength_cdf: Callable[[float], float] = uniform_tug_cdf,
 ) -> Tuple[float, float]:
-    """(p_plus, p_minus) under a continuous kick-weight law mu_C (eq. 3.1) --
+    """(p_plus, p_minus) under a continuous tug-strength law mu_C (eq. 3.1) --
     the same quantities fixation_bias_distributed collapses into their ratio
     rho, exposed separately here because detection_floor (3.2d) needs the
     SUM p_plus + p_minus, not just the ratio. Mirrors
@@ -654,6 +654,6 @@ def kick_success_probabilities_distributed(
     bare rho.
     """
     geom = chord_geometry(a, b, delta_norm, r=r)
-    p_plus = 1.0 - kick_weight_cdf(geom["vartheta_A_to_B"])
-    p_minus = 1.0 - kick_weight_cdf(geom["vartheta_B_to_A"])
+    p_plus = 1.0 - tug_strength_cdf(geom["vartheta_A_to_B"])
+    p_minus = 1.0 - tug_strength_cdf(geom["vartheta_B_to_A"])
     return p_plus, p_minus

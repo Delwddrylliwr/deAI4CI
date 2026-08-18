@@ -86,7 +86,7 @@ from analysis.clique_fixation import (
     experiment_E7,
     experiment_E12b,
     experiment_E14_round_ratio_sweep,
-    experiment_E15_distributed_kick_curvature_ratchet,
+    experiment_E15_distributed_tug_curvature_ratchet,
 )
 from analysis.chord_calibration import experiment_E0
 from analysis.multi_basin_destruction import experiment_E15MB
@@ -221,7 +221,7 @@ EXPERIMENT_HOURS: Dict[str, float] = {
                       # depth=5) but local_steps up to 400 (8x the usual 50) in the same sweep;
                       # protocol is embedded in the config name (all 3 mechanisms share this one
                       # entry, not split into E14SP/E14SN) -- refine once actually run.
-    "E15": 0.01,     # == E12b (identical mechanism, just a distributed vs fixed kick weight --
+    "E15": 0.01,     # == E12b (identical mechanism, just a distributed vs fixed tug strength --
                       # no reason to expect a different per-task cost)
     "E15SP": 0.02,
     # Phase H1 (Annex B.1's E0 gate -- see the hybrid-campaign plan doc).
@@ -741,11 +741,11 @@ def build_phase_tasks(
         for cfg in experiment_E14_meritocratic_filter_local_steps(seeds=_seeds(20)):
             tasks.append(_nc_task(cfg, "E14", phase, results_root))
 
-        # E15: E12b's curvature ratchet under a genuinely distributed kick
-        # weight (kick_weight_law="uniform") instead of E12b's fixed alpha
+        # E15: E12b's curvature ratchet under a genuinely distributed tug
+        # strength (tug_strength_law="uniform") instead of E12b's fixed alpha
         # -- compare against theory.fixation_bias_distributed, not
         # theory.fixation_bias. Separate output prefix "E15", never "E12b".
-        for cfg in experiment_E15_distributed_kick_curvature_ratchet(seeds=_seeds(50)):
+        for cfg in experiment_E15_distributed_tug_curvature_ratchet(seeds=_seeds(50)):
             tasks.append(_clique_task(cfg, "E15", phase, results_root))
 
     elif phase == "6sp":
@@ -758,7 +758,7 @@ def build_phase_tasks(
         for cfg in experiment_E12b(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
             tasks.append(_clique_task(cfg, "E12bSP", phase, results_root))
 
-        for cfg in experiment_E15_distributed_kick_curvature_ratchet(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
+        for cfg in experiment_E15_distributed_tug_curvature_ratchet(seeds=_seeds(50), gossip_protocol="sync_pairwise"):
             tasks.append(_clique_task(cfg, "E15SP", phase, results_root))
         # E5 requires async_poisson (provenance); E11 already sweeps sync
         # internally via its own `schedulings` list -- no separate 6S variant.

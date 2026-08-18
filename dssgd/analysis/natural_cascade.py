@@ -127,7 +127,7 @@ class NaturalCascadeConfig:
     per_leaf_loss_params: Optional[List[Tuple[float, float]]] = None
     t_horizon: int = 800           # round index used by cascade_size observable
 
-    # Experiment E1: kick-vs-escape provenance tracking + gossip-severed control.
+    # Experiment E1: tug-vs-escape provenance tracking + gossip-severed control.
     track_provenance: bool = False  # log cross-boundary events (async_poisson only)
     sever_min_distance: Optional[int] = None  # prune edges >= this hierarchical
     # distance apart before simulating (Prop. 3.4's severed-system null); None = no severing.
@@ -285,7 +285,7 @@ def run_natural_cascade_simulation(
         basin B is identified post-hoc and used as the cascade source.
 
     Timescale separation: local_steps gradient steps precede each gossip
-    event, ensuring full basin relaxation before the next kick (Regime C).
+    event, ensuring full basin relaxation before the next tug (Regime C).
     """
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
@@ -436,7 +436,7 @@ def run_natural_cascade_simulation(
             # Type-P sub-protocol gets the same event-level logging as the
             # async_poisson path (see HybridGossip's pairwise_protocol
             # docstring) -- Type-N never logs events (Lemma 2.4's clique
-            # round map has no per-kick provenance content), so this is the
+            # round map has no per-tug provenance content), so this is the
             # full two-axis instrumentation B.0.2 asks for at hierarchy
             # scale: "did a GossipEvent happen" already distinguishes the
             # jump type (always Type-P) from a flip with no recent event

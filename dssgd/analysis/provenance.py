@@ -1,18 +1,18 @@
-"""Provenance tracking for kick-vs-escape attribution (Experiment E1).
+"""Provenance tracking for tug-vs-escape attribution (Experiment E1).
 
 Round-level flip detection (active_escape.find_t_flip) records *when* a leaf
 enters basin B but not *why*: whether the transition was driven by a
-cross-boundary gossip kick (social transport) or occurred with no recent
+cross-boundary gossip tug (social transport) or occurred with no recent
 cross-boundary contact (independent noise-driven / Kramers escape via
 flip_noise_scale).  This module provides the reusable primitives:
 
   - GossipEvent / ProvenanceAsyncGossip: event-level logging of cross-leaf-
-    boundary kicks inside AsynchronousGossip, without changing its dynamics
+    boundary tugs inside AsynchronousGossip, without changing its dynamics
     (the RNG draw sequence is identical to the base class; logging is a pure
     side effect).
   - classify_flip_provenance / crossover_stage: post-hoc classifiers that
-    answer "kick or escape?" per flipped leaf, and the deepest hierarchical
-    distance at which flips are still kick-attributed (paper's l_c, eq 3.6).
+    answer "tug or escape?" per flipped leaf, and the deepest hierarchical
+    distance at which flips are still tug-attributed (paper's l_c, eq 3.6).
   - sever_boundaries / SeveredTopology: the gossip-severed control
     (epsilon=0 across a chosen hierarchy level) used as the transport null
     against which E1's provenance statistics are compared (Proposition 3.4).
@@ -63,7 +63,7 @@ class ProvenanceAsyncGossip(AsynchronousGossip):
     """AsynchronousGossip that additionally logs cross-boundary events.
 
     Mechanically identical to the base class -- the exact same sequence of
-    RNG draws produces the exact same kicks -- with an `events` log appended
+    RNG draws produces the exact same tugs -- with an `events` log appended
     to as a side effect.  Callers must set `.round_idx` before each
     measurement round; `.step_idx` auto-increments once per execute() call
     (i.e. once per local gradient step, matching how natural_cascade.py
@@ -139,9 +139,9 @@ def classify_flip_provenance(
     events: List[GossipEvent],
     lookback_rounds: int = 5,
 ) -> Dict[int, str]:
-    """Classify each flipped leaf's first sustained B-entry as 'kick' or 'escape'.
+    """Classify each flipped leaf's first sustained B-entry as 'tug' or 'escape'.
 
-    'kick'   -- at least one cross-boundary event landed on this leaf (as the
+    'tug'    -- at least one cross-boundary event landed on this leaf (as the
                 initiator, i.e. the leaf pulled state from a different leaf)
                 within `lookback_rounds` rounds before its flip.
     'escape' -- no such event: the flip is attributed to local noise
@@ -164,7 +164,7 @@ def classify_flip_provenance(
         touched = any(
             window_lo <= ev.round_idx <= t_flip for ev in by_leaf.get(leaf, [])
         )
-        result[leaf] = "kick" if touched else "escape"
+        result[leaf] = "tug" if touched else "escape"
     return result
 
 
@@ -173,20 +173,20 @@ def crossover_stage(
     events: List[GossipEvent],
     lookback_rounds: int = 5,
 ) -> Optional[int]:
-    """Highest hierarchical distance at which a flip is still kick-attributed.
+    """Highest hierarchical distance at which a flip is still tug-attributed.
 
     This is the paper's l_c (eq 3.6): beyond this stage, transmission is no
     faster than local rediscovery, and observed transitions cannot be
     attributed to social transport.  Returns None if no leaf ever flipped.
     """
     provenance = classify_flip_provenance(flip_table, events, lookback_rounds)
-    kick_distances = [
+    tug_distances = [
         row["distance_from_source"]
         for row in flip_table
-        if provenance.get(row["target_leaf"]) == "kick"
+        if provenance.get(row["target_leaf"]) == "tug"
         and row["distance_from_source"] is not None
     ]
-    return max(kick_distances) if kick_distances else None
+    return max(tug_distances) if tug_distances else None
 
 
 # ---------------------------------------------------------------------------

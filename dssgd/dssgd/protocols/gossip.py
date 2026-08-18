@@ -18,7 +18,7 @@ class GossipAveraging(Protocol):
     """Synchronous NEIGHBOURHOOD-averaging gossip (gossip_protocol="sync_neighbourhood",
     suffix "SN"): all agents snapshot state, then each averages with its
     whole current neighbourhood + self -- a simultaneous m-way mean, not a
-    pairwise kick. This is the mechanism E9/Lemma 6.1's basin-destruction
+    pairwise tug. This is the mechanism E9/Lemma 6.1's basin-destruction
     result deliberately uses (uniform averaging is basin-destroying). It is
     NOT the H-sched round-synchronous scheduling of Remark 4.3 -- that is
     SynchronousPairwiseGossip ("sync_pairwise", suffix "SP") below. The two
@@ -192,9 +192,9 @@ class AsynchronousGossip(Protocol):
         from the neighbour's perspective).  Default 0.5. Ignored if
         `alpha_sampler` is set.
     alpha_sampler : Callable[[], float] | None
-        If set, draws a FRESH kick weight from this callable for every
+        If set, draws a FRESH tug strength from this callable for every
         event, instead of using the fixed `alpha` -- this is this repo's
-        degenerate kick-weight law (a point mass at `alpha`, see
+        degenerate tug-strength law (a point mass at `alpha`, see
         theory.fixation_bias's docstring) generalised to a genuinely
         continuous one (theory.fixation_bias_distributed). Use
         `make_uniform_alpha_sampler` for the natural Uniform(0,1) default
@@ -275,7 +275,7 @@ class BoundedStalenessGossip(AsynchronousGossip):
     """AsynchronousGossip with a per-edge staleness lock (Experiment E11,
     Remark 4.3's "restorable by per-boundary seed-locking or bounded staleness").
 
-    Identical kick mechanics to AsynchronousGossip, except an edge (i,j) that
+    Identical tug mechanics to AsynchronousGossip, except an edge (i,j) that
     fired within the last `staleness_bound` rounds is skipped on subsequent
     draws (the event is dropped, not retried) until the lock expires. This
     approximates round-synchronous, renewal-enforcing scheduling (H-sched)
@@ -338,7 +338,7 @@ class BoundedStalenessGossip(AsynchronousGossip):
 
 
 class SynchronousPairwiseGossip(Protocol):
-    """Round-synchronous scheduling of pairwise kicks (gossip_protocol=
+    """Round-synchronous scheduling of pairwise tugs (gossip_protocol=
     "sync_pairwise", suffix "SP"; Remark 4.3's H-sched class,
     paper1_PDMP_wDAG_wData.md Section 4.2/Annex D.1: "Round-synchronous scheduling
     (all edges, or a maximal matching, per round, with full relaxation between
@@ -346,13 +346,13 @@ class SynchronousPairwiseGossip(Protocol):
 
     Unlike GossipAveraging (a simultaneous m-way mean over each agent's whole
     neighbourhood), this computes a maximal matching over the round's graph and
-    applies, per matched pair, the *same* one-sided pairwise kick AsynchronousGossip
+    applies, per matched pair, the *same* one-sided pairwise tug AsynchronousGossip
     uses -- so the scheduling axis (synchronous round-matching vs. free asynchrony)
-    is isolated from the update-rule axis (pairwise kick vs. m-way average), which
+    is isolated from the update-rule axis (pairwise tug vs. m-way average), which
     Remark 4.3's H-sched hypothesis and Proposition D.3.2's scheduling parameter
     sigma_sched are specifically about. All matched pairs read from a pre-round
     snapshot, so the round is genuinely simultaneous; unmatched agents are
-    untouched this round (at most one kick per agent per round, as under a
+    untouched this round (at most one tug per agent per round, as under a
     maximal matching).
 
     The matching is recomputed with a FRESH randomized greedy order every round
@@ -379,7 +379,7 @@ class SynchronousPairwiseGossip(Protocol):
         AsynchronousGossip's `alpha` (default 0.5: symmetric pairwise average
         on the initiator side). Ignored if `alpha_sampler` is set.
     alpha_sampler : Callable[[], float] | None
-        If set, draws a FRESH kick weight per matched pair instead of using
+        If set, draws a FRESH tug strength per matched pair instead of using
         the fixed `alpha` -- see AsynchronousGossip's `alpha_sampler` for the
         full rationale (theory.fixation_bias_distributed's simulation-side
         counterpart); `make_uniform_alpha_sampler` gives the matching
@@ -449,7 +449,7 @@ class SynchronousPairwiseGossip(Protocol):
 class HybridGossip(Protocol):
     """The two-jump protocol (gossip_protocol="hybrid", suffix "H";
     paper1_computing_hybrid_gossip.md Sec. 2.1): continuous Poisson Type-P
-    pairwise kicks (AsynchronousGossip's mechanics) running simultaneously
+    pairwise tugs (AsynchronousGossip's mechanics) running simultaneously
     with periodic Type-N neighbourhood-averaging rounds (GossipAveraging's
     mechanics) every `epsilon_n_rounds` rounds. This is a genuinely new
     mechanism, not a CompositeProtocol wrapping the two existing classes:
@@ -551,7 +551,7 @@ class HybridGossip(Protocol):
         one (a ProvenanceAsyncGossip pairwise_protocol was supplied).
         Type-N events are never logged: Lemma 2.4's clique-consensus round
         map has no cross-boundary "which leaf did this come from" content
-        the way a single Type-P kick does, so there is nothing analogous to
+        the way a single Type-P tug does, so there is nothing analogous to
         attribute -- the two-axis provenance's jump-type axis is realised as
         "this event exists" (always Type-P) rather than a stored field."""
         return getattr(self._pairwise, "events", None)
@@ -596,13 +596,13 @@ class HybridGossip(Protocol):
 
 
 def make_uniform_alpha_sampler(rng: Optional[np.random.Generator] = None) -> Callable[[], float]:
-    """Kick-weight sampler drawing a fresh alpha ~ Uniform(0,1) each call --
-    the simulation-side counterpart to theory.uniform_kick_cdf /
-    fixation_bias_distributed's default kick-weight law mu_C. Pass as the
+    """Tug-strength sampler drawing a fresh alpha ~ Uniform(0,1) each call --
+    the simulation-side counterpart to theory.uniform_tug_cdf /
+    fixation_bias_distributed's default tug-strength law mu_C. Pass as the
     `alpha_sampler` argument to AsynchronousGossip/SynchronousPairwiseGossip
-    so the actual kick mechanics draw from the SAME law a
+    so the actual tug mechanics draw from the SAME law a
     fixation_bias_distributed prediction assumes, rather than the theory and
-    simulation sides independently guessing what "distributed kick weight"
+    simulation sides independently guessing what "distributed tug strength"
     means (see gossip_mechanisms.md and theory.fixation_bias's docstring for
     why this repo's original fixed-alpha default was a degenerate special
     case of this, not a distribution at all).

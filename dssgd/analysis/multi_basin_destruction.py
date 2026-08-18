@@ -9,9 +9,9 @@ in unoccupied basins, frequency increasing in m and in basin count;
 plurality predicted to show neither."
 
 NAMED "E15MB" (multi-basin), never bare "E15": clique_fixation.py's
-`experiment_E15_distributed_kick_curvature_ratchet` already occupies "E15"
-for a DIFFERENT experiment (the original paper's distributed-kick-weight
-curvature ratchet, Lemma 10.1's counterpart under a continuous kick-weight
+`experiment_E15_distributed_tug_curvature_ratchet` already occupies "E15"
+for a DIFFERENT experiment (the original paper's distributed-tug-strength
+curvature ratchet, Lemma 10.1's counterpart under a continuous tug-strength
 law) -- an unrelated result that happens to share the revised paper's
 Annex B numbering by coincidence. Reusing "E15" for this would be exactly
 the naming collision gossip_mechanisms.md's "S"/"synchronous" retirement

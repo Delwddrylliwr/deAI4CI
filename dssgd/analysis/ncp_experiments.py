@@ -12,7 +12,7 @@ NCP-5: Stationary distribution factorisation (conditional mutual information)
 gossip_protocol parameter (NCP-2 through NCP-5):
   "async_poisson"        — AsynchronousGossip (default; Phase xA), no suffix
   "sync_pairwise"        — SynchronousPairwiseGossip: round-synchronous
-                           maximal-matching pairwise kicks (Remark 4.3's
+                           maximal-matching pairwise tugs (Remark 4.3's
                            H-sched class), suffix "SP"
   "sync_neighbourhood"   — GossipAveraging: simultaneous m-way mean (Lemma
                            6.1's basin-destroying mechanism), suffix "SN"

@@ -8,12 +8,12 @@ receiver's own relaxation, lands the receiver in basin b with probability
 
 Shared by Experiment C1 (whose gossip_capacity_bits sweep already exercises
 this quantize-then-relax mechanism live, inside a full cascade run via
-dssgd.protocols.gossip's capacity-limited kicks) and Experiment C3 (which
+dssgd.protocols.gossip's capacity-limited tugs) and Experiment C3 (which
 needs a STANDALONE per-basin measurement -- not a full cascade -- to build a
 family of (vartheta, operational DL) points to correlate against
 generalisation gap, per Lemma 4.2 / Remark 4.4). Both reuse the exact same
 `quantize_tensor` primitive and the same loss_fn/basin_label machinery from
-gossip.py/active_escape.py, so "kick success" (C1) and "operational DL"
+gossip.py/active_escape.py, so "tug success" (C1) and "operational DL"
 (C3) are provably the same test applied at different granularities (Claim
 4.3), not independently-implemented approximations of one another.
 """
@@ -109,10 +109,10 @@ def measure_passage_probability(
     """Empirical Pr[receiver lands in target_basin] over n_trials
     independent receiver draws, each: quantize sender_theta to capacity_bits
     (or transmit exactly if None -- the uncompressed control), apply one
-    kick x_i <- (1-alpha)*x_i + alpha*decoded_w_j from a freshly-initialised
+    tug x_i <- (1-alpha)*x_i + alpha*decoded_w_j from a freshly-initialised
     receiver x_i, then relax for relax_steps of the receiver's own local
     descent. This is exactly the mechanism Definition 4.1 describes and the
-    one Experiment C1's live gossip_capacity_bits kicks implement inside a
+    one Experiment C1's live gossip_capacity_bits tugs implement inside a
     full cascade -- reusing quantize_tensor here (not re-deriving it) is
     what keeps the two consistent.
     """
@@ -123,8 +123,8 @@ def measure_passage_probability(
         w_j = torch.tensor([float(sender_theta)])
         if capacity_bits is not None:
             w_j, _, _ = quantize_tensor(w_j, capacity_bits, lattice_center, lattice_extent)
-        kicked = (1.0 - alpha) * x_i + alpha * float(w_j.item())
-        final_theta = _relax(kicked, loss_fn, lr, relax_steps)
+        tugged = (1.0 - alpha) * x_i + alpha * float(w_j.item())
+        final_theta = _relax(tugged, loss_fn, lr, relax_steps)
         label = basin_label(np.array([final_theta]), theta_A, theta_B, epsilon)
         if label == target_basin:
             n_success += 1

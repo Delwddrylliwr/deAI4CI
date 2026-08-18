@@ -484,7 +484,7 @@ def experiment_E1(
     n_warmup: int = 400,
     n_meas: int = 1000,
 ) -> List[NaturalCascadeConfig]:
-    """Provenance tracing (kick vs escape attribution) at matched (a,b,sigma)
+    """Provenance tracing (tug vs escape attribution) at matched (a,b,sigma)
     operating points, plus the gossip-severed control at several severing
     distances (sever_min_distances includes None = no severing, i.e. the
     ordinary provenance-tracked run) -- Proposition 3.4's slope-0 null is
@@ -658,7 +658,7 @@ def experiment_E5(
     epsilon_n_rounds: int = 5,
 ) -> List[NaturalCascadeConfig]:
     """sigma-sweep at fixed (a,b,epsilon): track_provenance=True so l_c
-    (highest hierarchical distance still kick-attributed) can be computed
+    (highest hierarchical distance still tug-attributed) can be computed
     post-hoc from the returned event log via provenance.crossover_stage.
 
     paper1_computing_hybrid_gossip.md Annex B.2's revised E5 ("sigma-sweep
@@ -819,7 +819,7 @@ def experiment_E6(
     a claim about PROPAGATION (does an already-arisen innovation reach depth
     G?), not about spontaneous origination. Under deterministic gradient
     descent with lambda<1 (genuine bistability, per Lemma 2.1) and no peer
-    kicks available to an isolated source at t=0, the source leaf has no
+    tugs available to an isolated source at t=0, the source leaf has no
     mechanism to escape basin A on its own -- confirmed empirically: with
     force_flip_source=False (the prior default here), the source never
     nucleates at all (nucleation_leaf=None every seed), making d_max=0

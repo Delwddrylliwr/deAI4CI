@@ -8,10 +8,10 @@ over many seeds is compared against theory.fixation_probability(j, m,
 theory.fixation_bias(a, b, alpha, r=r)) -- Lemma 3.1's formula with a
 *computed*, not fitted, bias (E7 at r=1; E12(b) sweeps r, Lemma 10.1).
 
-E15 is E12b's counterpart under a genuinely continuous kick-weight law
-(CliqueFixationConfig.kick_weight_law="uniform") rather than E12b's fixed
+E15 is E12b's counterpart under a genuinely continuous tug-strength law
+(CliqueFixationConfig.tug_strength_law="uniform") rather than E12b's fixed
 alpha -- compare against theory.fixation_bias_distributed, not
-theory.fixation_bias, for that one. See experiment_E15_distributed_kick_
+theory.fixation_bias, for that one. See experiment_E15_distributed_tug_
 curvature_ratchet's docstring for why this needed its own experiment rather
 than a parameter sweep on E12b.
 """
@@ -66,19 +66,19 @@ class CliqueFixationConfig:
     gossip_protocol: str = "async_poisson"
     gossip_rate: Optional[float] = None
     gossip_alpha: float = 0.5
-    # "fixed" (default): every kick uses gossip_alpha exactly, matching
-    # theory.fixation_bias's degenerate kick-weight law. "uniform": each
-    # kick draws alpha ~ Uniform(0,1) fresh (gossip.make_uniform_alpha_
+    # "fixed" (default): every tug uses gossip_alpha exactly, matching
+    # theory.fixation_bias's degenerate tug-strength law. "uniform": each
+    # tug draws alpha ~ Uniform(0,1) fresh (gossip.make_uniform_alpha_
     # sampler), matching theory.fixation_bias_distributed's default CDF --
-    # a genuinely continuous kick-weight law, testing Lemma 3.1/10.1's
+    # a genuinely continuous tug-strength law, testing Lemma 3.1/10.1's
     # general (non-degenerate) reduction rather than its point-mass special
     # case. A plain string (not a live Callable) so this config stays
     # JSON-serialisable for the HPC queue; run_clique_fixation_trial builds
     # the actual sampler from it at runtime. Only meaningful for
     # gossip_protocol in {"async_poisson", "sync_pairwise"} (the two that
-    # use a scalar per-kick alpha at all) -- "uniform" with
+    # use a scalar per-tug alpha at all) -- "uniform" with
     # "sync_neighbourhood" raises, rather than silently having no effect.
-    kick_weight_law: str = "fixed"
+    tug_strength_law: str = "fixed"
 
     # Hybrid protocol only (gossip_protocol="hybrid"): round ratio K
     # (eq. 2.2c) and the Type-N period, exactly as NaturalCascadeConfig's
@@ -165,14 +165,14 @@ def run_clique_fixation_trial(config: CliqueFixationConfig) -> CliqueFixationRun
             f"Type-P/Type-N granularity is undefined for {config.gossip_protocol!r})"
         )
 
-    if config.kick_weight_law not in ("fixed", "uniform"):
+    if config.tug_strength_law not in ("fixed", "uniform"):
         raise ValueError(
-            f"Unknown kick_weight_law {config.kick_weight_law!r}; expected "
+            f"Unknown tug_strength_law {config.tug_strength_law!r}; expected "
             f"'fixed' or 'uniform'."
         )
     alpha_sampler = (
         make_uniform_alpha_sampler(np.random.default_rng(config.seed + 43))
-        if config.kick_weight_law == "uniform" else None
+        if config.tug_strength_law == "uniform" else None
     )
 
     _async = config.gossip_protocol == "async_poisson"
@@ -190,11 +190,11 @@ def run_clique_fixation_trial(config: CliqueFixationConfig) -> CliqueFixationRun
             rng=np.random.default_rng(config.seed + 42),
         )
     elif config.gossip_protocol == "sync_neighbourhood":
-        if config.kick_weight_law != "fixed":
+        if config.tug_strength_law != "fixed":
             raise ValueError(
-                "kick_weight_law='uniform' has no effect under "
+                "tug_strength_law='uniform' has no effect under "
                 "gossip_protocol='sync_neighbourhood' (GossipAveraging has "
-                "no scalar per-kick alpha to distribute -- it mixes with the "
+                "no scalar per-tug alpha to distribute -- it mixes with the "
                 "whole neighbourhood via the topology's own weights); "
                 "combining them would silently test nothing, so this is an "
                 "error rather than a silent no-op."
@@ -336,7 +336,7 @@ def experiment_E7(
     predicts a step function of lambda at the default gossip_alpha=0.5 (see
     that function's docstring) -- this is exactly the comparison E7 is
     designed to make between the idealised prediction and the repo's actual
-    interleaved kick/local_steps dynamics.
+    interleaved tug/local_steps dynamics.
     """
     prefix = f"E7{protocol_suffix(gossip_protocol)}"
     configs = []
@@ -381,7 +381,7 @@ def experiment_E12b(
     return configs
 
 
-def experiment_E15_distributed_kick_curvature_ratchet(
+def experiment_E15_distributed_tug_curvature_ratchet(
     r_list: List[float] = (1.0, 1.1, 1.2, 1.5, 2.0),
     m_list: List[int] = (4, 8, 16),
     a: float = 0.5,
@@ -391,8 +391,8 @@ def experiment_E15_distributed_kick_curvature_ratchet(
     gossip_protocol: str = "async_poisson",
 ) -> List[CliqueFixationConfig]:
     """E15: E12b's within-clique curvature ratchet (Lemma 10.1), but under a
-    genuinely continuous kick-weight law (kick_weight_law="uniform": alpha ~
-    Uniform(0,1) per kick, gossip.make_uniform_alpha_sampler) instead of
+    genuinely continuous tug-strength law (tug_strength_law="uniform": alpha ~
+    Uniform(0,1) per tug, gossip.make_uniform_alpha_sampler) instead of
     E12b's fixed alpha=0.5 -- the fair test of Lemma 10.1's GENERAL
     reduction, not its degenerate point-mass special case.
 
@@ -407,10 +407,10 @@ def experiment_E15_distributed_kick_curvature_ratchet(
     found does not match the smooth empirical decay E12b's own async data
     shows. theory.fixation_bias_distributed predicts, and this experiment
     tests, whether that smooth decay is recovered once the simulation's own
-    kick weight is ALSO genuinely distributed (not just the prediction
+    tug strength is ALSO genuinely distributed (not just the prediction
     formula): compare empirical fixation frequency against
     theory.fixation_bias_distributed(a, 0.0, r=r) here, not
-    theory.fixation_bias(a, 0.0, kick_weight=..., r=r) (E12b's comparison,
+    theory.fixation_bias(a, 0.0, tug_strength=..., r=r) (E12b's comparison,
     still correct for what E12b actually simulates).
 
     Output prefix "E15", never "E12b" -- keeps this from being confused
@@ -425,6 +425,6 @@ def experiment_E15_distributed_kick_curvature_ratchet(
                     name=f"{prefix}/r={r}/m={m}/seed={seed}",
                     m=m, j_seeds=1, a=a, b=0.0, r=r, seed=seed,
                     local_steps=local_steps, n_rounds=n_rounds,
-                    gossip_protocol=gossip_protocol, kick_weight_law="uniform",
+                    gossip_protocol=gossip_protocol, tug_strength_law="uniform",
                 ))
     return configs
