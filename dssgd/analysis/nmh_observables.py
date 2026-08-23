@@ -161,13 +161,25 @@ def realized_cross_edge_count(
     Requires the caller to know `graph_seed` -- the config used to run the
     simulation, not the run's own `seed` field, since Experiment E4
     deliberately decouples the two (NaturalCascadeConfig.graph_seed).
+
+    Goes through the same connectivity-retry wrapper the original run used
+    (build_nmh_topology_with_retry) rather than constructing
+    NestedModularTopology directly: at low p, the first draw for a given
+    graph_seed is often disconnected (natural_cascade.py's docstring
+    reports 16/20 seeds failing at p=0.5, branching=2, depth=5,
+    leaf_size=4) and the simulation transparently retries with a perturbed
+    seed. NaturalCascadeRun does not persist which trial seed actually
+    succeeded, so reconstructing with a bare seed=graph_seed can raise
+    the disconnected-graph ValueError on runs whose original build needed
+    a retry. The retry offset is deterministic given graph_seed, so this
+    reproduces the exact graph the run used.
     """
-    from dssgd.topology.static import NestedModularTopology
+    from dssgd.analysis.natural_cascade import build_nmh_topology_with_retry
 
     level = hierarchical_distance(source_leaf, target_leaf)
     if level == 0:
         return 0
-    topo = NestedModularTopology(
+    topo = build_nmh_topology_with_retry(
         branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=graph_seed,
     )
     G, _ = topo.step(0)
@@ -223,10 +235,15 @@ def source_module_boundary_fraction(
     (the graph itself isn't persisted on NaturalCascadeRun) -- graph_seed
     must be the value the run actually used
     (config.graph_seed if not None else config.seed).
-    """
-    from dssgd.topology.static import NestedModularTopology
 
-    topo = NestedModularTopology(
+    Uses build_nmh_topology_with_retry rather than NestedModularTopology
+    directly, for the same reason as realized_cross_edge_count: the
+    original run silently retries with a perturbed seed on a disconnected
+    first draw, and that's common at low p (e.g. p=0.5 with this shape).
+    """
+    from dssgd.analysis.natural_cascade import build_nmh_topology_with_retry
+
+    topo = build_nmh_topology_with_retry(
         branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=graph_seed,
     )
     G, _ = topo.step(0)
