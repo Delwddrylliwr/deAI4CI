@@ -174,7 +174,7 @@ def realized_cross_edge_count(
     a retry. The retry offset is deterministic given graph_seed, so this
     reproduces the exact graph the run used.
     """
-    from dssgd.analysis.natural_cascade import build_nmh_topology_with_retry
+    from .natural_cascade import build_nmh_topology_with_retry
 
     level = hierarchical_distance(source_leaf, target_leaf)
     if level == 0:
@@ -241,7 +241,7 @@ def source_module_boundary_fraction(
     original run silently retries with a perturbed seed on a disconnected
     first draw, and that's common at low p (e.g. p=0.5 with this shape).
     """
-    from dssgd.analysis.natural_cascade import build_nmh_topology_with_retry
+    from .natural_cascade import build_nmh_topology_with_retry
 
     topo = build_nmh_topology_with_retry(
         branching=branching, depth=depth, leaf_size=leaf_size, p=p, seed=graph_seed,
